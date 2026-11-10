@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import random
+import re
 import struct
 import sys
 import time
@@ -1474,8 +1475,8 @@ class ExtError(Exception):
 
 
 EXT_CLASSES: dict[str, type] = {}
-DEFAULT_EXTENSIONS = ["github", "vscode", "forge",
-                      "uptime", "syncthing", "paperless", "pogo", "deadlock", "hello"]
+DEFAULT_EXTENSIONS = ["github", "vscode", "forge", "uptime", "pihole", "wireguard", "raspi",
+                      "syncthing", "paperless", "pogo", "deadlock", "hello"]
 EXTENSIONS: dict[str, "Ext"] = {}       # the ones this process serves, in order
 
 
@@ -2158,6 +2159,343 @@ class Syncthing(Ext):
             raise ExtError("Already syncing.")
         f[3], f[4] = now(), 12
         return f"Rescanning {f[0]}"
+
+
+# ----------------------------------------------------- network and the Pi ----
+# Views of the Pi-hole and WireGuard tools and of the Pi's own configuration
+# tool. Invented numbers, names and addresses; a real bridge would call
+# Pi-hole's API, the `wg` command and the Pi's configuration tool instead.
+def size(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def updays(sec: float) -> str:
+    return dur(sec) if sec < 86400 else f"{int(sec) // 86400}d {int(sec) % 86400 // 3600}h"
+
+
+@extension
+class PiHole(Ext):
+    """DNS filtering. Pause lasts 20 seconds here (5 minutes on a real Pi-hole) and ends by itself."""
+    id, name, icon, group = "pihole", "Pi-hole", "list", "Network"
+    refresh_s = 3
+    PAUSE_S = 20
+    BLOCKED = [("ads.example", 3120), ("tracker.invalid", 2480), ("telemetry.tracker.invalid", 1655),
+               ("banner.ads.example", 1210), ("metrics.example.invalid", 842)]
+    CLIENTS = [("atlas", 18420), ("laptop", 11260), ("phone", 9870), ("nuc", 5310), ("pi", 2140)]
+    ALLOWED = ["docs.example.org", "cdn.example.net", "updates.example.com", "mail.example.org", "time.example.net"]
+
+    def __init__(self):
+        self.disabled = False
+        self.pause_until = 0.0
+        self.custom: list[str] = []
+        self.list_size = 84213
+
+    def _settle(self):
+        if self.pause_until and now() >= self.pause_until:
+            self.pause_until = 0.0
+
+    def _blocking(self):
+        self._settle()
+        return not self.disabled and not self.pause_until
+
+    def _totals(self):
+        age = int(now() - START)
+        extra = sum(b for _, b in self.BLOCKED) // 40
+        return 48210 + age * 2, 13307 + age // 2 + extra
+
+    def card(self):
+        self._settle()
+        if self.disabled:
+            return "Blocking is off", None, "bad"
+        if self.pause_until:
+            return f"Paused, {int(self.pause_until - now())}s left", None, "warn"
+        q, b = self._totals()
+        return f"{b / q * 100:.1f}% of {q:,} queries blocked", None, "ok"
+
+    def sections(self):
+        self._settle()
+        q, b = self._totals()
+        if self.disabled:
+            state, tone, word = "Blocking is off", "bad", "off"
+        elif self.pause_until:
+            state, tone, word = f"Paused, back on in {int(self.pause_until - now()) + 1}s", "warn", "paused"
+        else:
+            state, tone, word = "Blocking is on", "ok", "on"
+        acts = [btn("pause", "Pause 5 min")]
+        acts.append(btn("enable", "Enable", "primary") if (self.disabled or self.pause_until)
+                    else btn("disable", "Disable", "danger", confirm="Turn DNS blocking off for every device?"))
+        r = random.Random(int(now() // 6))
+        recent = []
+        for i in range(8):
+            blocked = self._blocking() and r.random() < 0.45
+            dom = r.choice([d for d, _ in self.BLOCKED] + self.custom) if blocked else r.choice(self.ALLOWED)
+            recent.append(row(f"q{i}", dom, r.choice(self.CLIENTS)[0], f"{(i + 1) * 4}s ago",
+                              "bad" if blocked else "ok", [chip("blocked" if blocked else "allowed", "bad" if blocked else "ok")]))
+        return [
+            section("Overview", {"type": "stats", "tiles": [
+                stat("Queries today", f"{q:,}"), stat("Blocked", f"{b:,}", "warn"),
+                stat("Percent blocked", f"{b / q * 100:.1f}%", "warn"), stat("Clients", len(self.CLIENTS))]}),
+            section("Blocking", {"type": "list", "items": [row("state", state, "Pi-hole DNS filter", "", tone, [chip(word, tone)])]},
+                    {"type": "text", "text": f"Demo only: a pause lasts {self.PAUSE_S} seconds here and then ends on its own. "
+                                             "A real Pi-hole would pause for the 5 minutes the button says."},
+                    {"type": "actions", "actions": acts}),
+            section("Top blocked domains", {"type": "list", "items": [
+                row("b-" + d, d, "", f"{n:,}", "bad") for d, n in self.BLOCKED]}),
+            section("Top clients", {"type": "list", "items": [
+                row("c-" + c, c, "", f"{n:,}", "muted") for c, n in self.CLIENTS]}),
+            section("Recent queries", {"type": "list", "items": recent}),
+            section("Blocklist", {"type": "text", "text": f"{self.list_size:,} domains blocked, {len(self.custom)} added here."},
+                    {"type": "actions", "actions": [btn("blocklist_add", "Add to blocklist", input={
+                        "label": "Domain to block", "placeholder": "ads.example"})]}),
+        ]
+
+    def act(self, action, item, text):
+        self._settle()
+        if action == "pause":
+            if self.disabled:
+                raise ExtError("Blocking is off. Enable it first.")
+            self.pause_until = now() + self.PAUSE_S
+            return f"Paused for {self.PAUSE_S} seconds (demo)"
+        if action == "enable":
+            self.disabled, self.pause_until = False, 0.0
+            return "Blocking enabled"
+        if action == "disable":
+            self.disabled, self.pause_until = True, 0.0
+            return "Blocking disabled"
+        if action == "blocklist_add":
+            d = clean(text or "").lower()
+            if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", d):
+                raise ExtError("Enter a domain like ads.example.")
+            if d in self.custom or d in [x for x, _ in self.BLOCKED]:
+                raise ExtError(f"{d} is already blocked.")
+            self.custom.append(d)
+            self.list_size += 1
+            return f"Blocked {d}"
+        raise ValueError(action)
+
+
+@extension
+class WireGuard(Ext):
+    """VPN server with invented peers. A new peer connects a few seconds after it is added."""
+    id, name, icon, group = "wireguard", "WireGuard", "bolt", "Network"
+    refresh_s = 3
+    CONNECT_S = 8
+
+    def __init__(self):
+        t = now()
+        self.last = t
+        # id -> name, ip, enabled, handshake ts (None = never), live, rx, tx, rate
+        self.peers: dict[str, dict] = {}
+        for n, hs, live, rx, tx in [("phone", t - 40, True, 912e6, 148e6), ("laptop", t - 95, True, 4.2e9, 610e6),
+                                    ("tablet", t - 7200, False, 88e6, 9e6), ("vault-site", t - 20, True, 31e9, 2.1e9),
+                                    ("guest-phone", t - 86400 * 9, False, 12e6, 2e6)]:
+            self._add(n, hs, live, rx, tx)
+        self.peers["peer-guest-phone"]["enabled"] = False
+        self.pending: dict[str, float] = {}
+
+    def _add(self, name, hs, live, rx=0.0, tx=0.0):
+        n = len(self.peers) + 2
+        while f"10.8.0.{n}" in [p["ip"] for p in self.peers.values()]:
+            n += 1
+        pid = "peer-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+        self.peers[pid] = dict(name=name, ip=f"10.8.0.{n}", enabled=True, hs=hs, live=live, rx=rx, tx=tx, key=f"demo-key-{n - 1:02d}")
+        return pid
+
+    def _settle(self):
+        t = now()
+        dt, self.last = t - self.last, t
+        for pid, due in list(self.pending.items()):
+            if t >= due:
+                del self.pending[pid]
+                if pid in self.peers:
+                    self.peers[pid].update(hs=t, live=True)
+        for p in self.peers.values():
+            if p["live"] and p["enabled"]:
+                p["hs"] = t - (t - START + sum(map(ord, p["name"])) % 97) % 130        # re-keys about every two minutes
+                p["rx"] += dt * 40e3
+                p["tx"] += dt * 6e3
+
+    def _age(self, p):
+        return None if p["hs"] is None or not p["enabled"] else now() - p["hs"]
+
+    def card(self):
+        self._settle()
+        up = sum(1 for p in self.peers.values() if (a := self._age(p)) is not None and a < 180)
+        return f"wg0 up, {up} of {len(self.peers)} peers connected", up or None, "ok"
+
+    def sections(self):
+        self._settle()
+        items = []
+        for pid, p in self.peers.items():
+            a = self._age(p)
+            if pid in self.pending:
+                sub, tone, state, meta = "waiting for first handshake", "warn", "waiting", ""
+            elif not p["enabled"]:
+                sub, tone, state, meta = "disabled", "muted", "disabled", ""
+            elif a is None:
+                sub, tone, state, meta = "never connected", "muted", "idle", ""
+            else:
+                tone = "ok" if a < 180 else "warn"
+                sub, state, meta = f"handshake {ago(a)}", "connected" if a < 180 else "stale", ""
+            acts = [btn("enable" if not p["enabled"] else "disable", "Enable" if not p["enabled"] else "Disable", item=pid),
+                    btn("remove", "Remove", "danger", confirm=f"Remove peer {p['name']}?", item=pid)]
+            items.append(row(pid, p["name"], f"{p['ip']}, {sub}", f"{size(p['rx'])} down, {size(p['tx'])} up", tone,
+                             [chip(state, tone), chip(p["key"])], actions=acts))
+        up = sum(1 for p in self.peers.values() if (a := self._age(p)) is not None and a < 180)
+        return [
+            section("Interface", {"type": "stats", "tiles": [
+                stat("wg0", "up", "ok"), stat("Port", "51820"), stat("Address", "10.8.0.1/24"),
+                stat("Connected", f"{up}/{len(self.peers)}", "ok" if up else "warn")]}),
+            section("Peers", {"type": "list", "items": items},
+                    {"type": "text", "text": "Keys are placeholders. A real bridge would read peers from the wg tool "
+                                             "and never send private keys or configs to the app."},
+                    {"type": "actions", "actions": [btn("add_peer", "Add peer", "primary", input={
+                        "label": "Peer name", "placeholder": "new-phone"})]}),
+        ]
+
+    def act(self, action, item, text):
+        self._settle()
+        if action == "add_peer":
+            n = clean(text or "")[:24]
+            if not n:
+                raise ExtError("Give the peer a name.")
+            if any(p["name"].lower() == n.lower() for p in self.peers.values()):
+                raise ExtError(f"{n} already exists.")
+            pid = self._add(n, None, False)
+            self.pending[pid] = now() + self.CONNECT_S
+            return f"Added {n} ({self.peers[pid]['ip']})"
+        if action not in ("enable", "disable", "remove"):
+            raise ValueError(action)
+        p = self.peers.get(item or "")
+        if not p:
+            raise ExtError("No such peer.")
+        if action == "remove":
+            del self.peers[item]
+            self.pending.pop(item, None)
+            return f"Removed {p['name']}"
+        p["enabled"] = action == "enable"
+        return f"{p['name']} {'enabled' if p['enabled'] else 'disabled'}"
+
+
+@extension
+class RaspberryPi(Ext):
+    """Settings and health of the demo Pi. Firmware update and reboot run for a few seconds."""
+    id, name, icon, group = "raspi", "Raspberry Pi", "chart", "Raspberry Pi"
+    refresh_s = 3
+    UPDATE_S, REBOOT_S = 10, 8
+    IFACES = [("ssh", "SSH", "remote shell on port 22"), ("vnc", "VNC", "remote desktop"), ("i2c", "I2C", "sensor bus"),
+              ("spi", "SPI", "serial peripheral bus"), ("serial", "Serial port", "login shell on the serial line"),
+              ("camera", "Camera", "ribbon camera connector")]
+    OC = {"none": 0, "modest": 6, "turbo": 14}
+
+    def __init__(self):
+        self.boot = BOOT["pi"]
+        self.on = {"ssh": True, "serial": False, "vnc": False, "i2c": False, "spi": False, "camera": False}
+        self.target = "console"
+        self.oc_set = self.oc_live = "none"
+        self.fw_current = False
+        self.fw_t0 = 0.0
+        self.reboot_t0 = 0.0
+        self.undervolt = True        # a past event, cleared by a reboot
+        self.reboot_needed = False
+
+    def _settle(self):
+        t = now()
+        if self.fw_t0 and t - self.fw_t0 >= self.UPDATE_S:
+            self.fw_t0, self.fw_current = 0.0, True
+        if self.reboot_t0 and t - self.reboot_t0 >= self.REBOOT_S:
+            self.reboot_t0, self.boot, self.undervolt = 0.0, t, False
+            self.oc_live, self.reboot_needed = self.oc_set, False
+
+    def _temp(self):
+        return walk("raspi-temp", 44, 52, 1.5) + self.OC[self.oc_live]
+
+    def card(self):
+        self._settle()
+        if self.reboot_t0:
+            return "Rebooting", None, "warn"
+        t = self._temp()
+        return f"{t:.0f} C, up {updays(now() - self.boot)}", None, "ok" if t < 60 else "warn" if t < 70 else "bad"
+
+    def sections(self):
+        self._settle()
+        t = self._temp()
+        rebooting = bool(self.reboot_t0)
+        fw_state = "updating" if self.fw_t0 else "up to date" if self.fw_current else "update available"
+        out = [section("Overview", {"type": "stats", "tiles": [
+            stat("Model", "Pi 4B, 4 GB"),
+            stat("CPU temp", "n/a" if rebooting else f"{t:.0f} C", "muted" if rebooting else "ok" if t < 60 else "warn" if t < 70 else "bad"),
+            stat("Uptime", "rebooting" if rebooting else updays(now() - self.boot), "warn" if rebooting else "muted"),
+            stat("Firmware", fw_state, "ok" if self.fw_current else "warn")]})]
+        if rebooting:
+            out.append(section("Reboot", {"type": "progress", "label": "Rebooting, back in a few seconds",
+                                          "value": pct_done(self.reboot_t0, self.REBOOT_S), "tone": "warn"}))
+            return out
+        out.append(section("Health", {"type": "list", "items": [
+            row("h-now", "Under-voltage now", "supply is steady", "no", "ok"),
+            row("h-boot", "Under-voltage since boot", "cleared by the next reboot" if self.undervolt else "none seen",
+                "once" if self.undervolt else "no", "warn" if self.undervolt else "ok"),
+            row("h-thr", "Throttled", "temperature limit not reached", "no", "ok"),
+            row("h-mem", "Memory split", "ARM 3.9 GB, GPU 76 MB", "", "muted")]},
+            {"type": "progress", "label": "SD card used, 17 of 58 GB", "value": 29, "tone": "ok"},
+            {"type": "progress", "label": "SD card wear estimate", "value": 12, "tone": "ok"}))
+        out.append(section("Interfaces", {"type": "list", "items": [
+            row(k, label, desc, "", "ok" if self.on[k] else "muted", [chip("on" if self.on[k] else "off", "ok" if self.on[k] else "muted")],
+                actions=[btn("disable" if self.on[k] else "enable", "Disable" if self.on[k] else "Enable",
+                             "danger" if self.on[k] and k == "ssh" else "default",
+                             confirm="Turn SSH off? You may not be able to log in remotely." if self.on[k] and k == "ssh" else None, item=k)])
+            for k, label, desc in self.IFACES]}))
+        other = "desktop" if self.target == "console" else "console"
+        oc_acts = [btn("overclock", p.capitalize(), item=p) for p in self.OC if p != self.oc_set]
+        out.append(section("Boot and display", {"type": "list", "items": [
+            row("target", "Boot to", "what the Pi starts after power on", "", "muted", [chip(self.target)],
+                actions=[btn("target", f"Boot to {other}", item=other)]),
+            row("hostname", "Hostname", "read only here", "", "muted", [chip("pi")]),
+            row("oc", "Overclock", "applies after a reboot" if self.oc_set != self.oc_live else "applied",
+                "", "warn" if self.oc_set != self.oc_live else "muted", [chip(self.oc_set)], actions=oc_acts)]},
+            *([{"type": "text", "text": "Reboot to apply the changes above."}] if self.reboot_needed else [])))
+        sysb = [{"type": "list", "items": [row("firmware", "Firmware and bootloader", "demo only, nothing is flashed",
+                                                 f"{int(pct_done(self.fw_t0, self.UPDATE_S))}%" if self.fw_t0 else "",
+                                                 "warn" if self.fw_t0 or not self.fw_current else "ok", [chip(fw_state, "ok" if self.fw_current else "warn")],
+                                                 progress=pct_done(self.fw_t0, self.UPDATE_S) if self.fw_t0 else None)]},
+                {"type": "actions", "actions": [btn("update_firmware", "Update firmware", "primary"),
+                                                btn("reboot", "Reboot", "danger", confirm="Reboot the Pi? It will be away for a few seconds.")]}]
+        out.append(section("System", *sysb))
+        return out
+
+    def act(self, action, item, text):
+        self._settle()
+        if self.reboot_t0:
+            raise ExtError("The Pi is rebooting.")
+        if action == "reboot":
+            self.reboot_t0 = now()
+            return "Rebooting"
+        if action == "update_firmware":
+            if self.fw_t0:
+                raise ExtError("Update already running.")
+            if self.fw_current:
+                raise ExtError("Firmware is already up to date.")
+            self.fw_t0 = now()
+            return "Updating firmware"
+        if action in ("enable", "disable"):
+            if item not in self.on:
+                raise ExtError("No such interface.")
+            self.on[item] = action == "enable"
+            return f"{item} {'enabled' if self.on[item] else 'disabled'}"
+        if action == "target":
+            if item not in ("console", "desktop"):
+                raise ExtError("Unknown boot target.")
+            self.target, self.reboot_needed = item, True
+            return f"Will boot to {item}"
+        if action == "overclock":
+            if item not in self.OC:
+                raise ExtError("Unknown preset.")
+            self.oc_set, self.reboot_needed = item, True
+            return f"Overclock set to {item}, reboot to apply"
+        raise ValueError(action)
 
 
 # ------------------------------------------------------------ extra pages ----
