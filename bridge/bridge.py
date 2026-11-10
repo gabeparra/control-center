@@ -2237,7 +2237,7 @@ class PiHole(Ext):
         return [
             section("Overview", {"type": "stats", "tiles": [
                 stat("Queries today", f"{q:,}"), stat("Blocked", f"{b:,}", "warn"),
-                stat("Percent blocked", f"{b / q * 100:.1f}%", "warn"), stat("Clients", len(self.CLIENTS))]}),
+                stat("Blocked %", f"{b / q * 100:.1f}%", "warn"), stat("Clients", len(self.CLIENTS))]}),
             section("Blocking", {"type": "list", "items": [row("state", state, "Pi-hole DNS filter", "", tone, [chip(word, tone)])]},
                     {"type": "text", "text": f"Demo only: a pause lasts {self.PAUSE_S} seconds here and then ends on its own. "
                                              "A real Pi-hole would pause for the 5 minutes the button says."},
@@ -2347,7 +2347,7 @@ class WireGuard(Ext):
         up = sum(1 for p in self.peers.values() if (a := self._age(p)) is not None and a < 180)
         return [
             section("Interface", {"type": "stats", "tiles": [
-                stat("wg0", "up", "ok"), stat("Port", "51820"), stat("Address", "10.8.0.1/24"),
+                stat("wg0", "up", "ok"), stat("Port", "51820"), stat("Address", "10.8.0.1"),
                 stat("Connected", f"{up}/{len(self.peers)}", "ok" if up else "warn")]}),
             section("Peers", {"type": "list", "items": items},
                     {"type": "text", "text": "Keys are placeholders. A real bridge would read peers from the wg tool "
@@ -2426,10 +2426,10 @@ class RaspberryPi(Ext):
         rebooting = bool(self.reboot_t0)
         fw_state = "updating" if self.fw_t0 else "up to date" if self.fw_current else "update available"
         out = [section("Overview", {"type": "stats", "tiles": [
-            stat("Model", "Pi 4B, 4 GB"),
+            stat("Model", "Pi 4B"),
             stat("CPU temp", "n/a" if rebooting else f"{t:.0f} C", "muted" if rebooting else "ok" if t < 60 else "warn" if t < 70 else "bad"),
-            stat("Uptime", "rebooting" if rebooting else updays(now() - self.boot), "warn" if rebooting else "muted"),
-            stat("Firmware", fw_state, "ok" if self.fw_current else "warn")]})]
+            stat("Uptime", "reboot" if rebooting else updays(now() - self.boot), "warn" if rebooting else "muted"),
+            stat("Firmware", "current" if self.fw_current else "update", "ok" if self.fw_current else "warn")]})]
         if rebooting:
             out.append(section("Reboot", {"type": "progress", "label": "Rebooting, back in a few seconds",
                                           "value": pct_done(self.reboot_t0, self.REBOOT_S), "tone": "warn"}))
@@ -2439,7 +2439,7 @@ class RaspberryPi(Ext):
             row("h-boot", "Under-voltage since boot", "cleared by the next reboot" if self.undervolt else "none seen",
                 "once" if self.undervolt else "no", "warn" if self.undervolt else "ok"),
             row("h-thr", "Throttled", "temperature limit not reached", "no", "ok"),
-            row("h-mem", "Memory split", "ARM 3.9 GB, GPU 76 MB", "", "muted")]},
+            row("h-mem", "Memory split", "Pi 4B with 4 GB: ARM 3.9 GB, GPU 76 MB", "", "muted")]},
             {"type": "progress", "label": "SD card used, 17 of 58 GB", "value": 29, "tone": "ok"},
             {"type": "progress", "label": "SD card wear estimate", "value": 12, "tone": "ok"}))
         out.append(section("Interfaces", {"type": "list", "items": [

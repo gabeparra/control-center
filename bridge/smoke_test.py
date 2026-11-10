@@ -806,13 +806,13 @@ def test_network_and_pi():
     ext_do("raspi", "reboot")
     ext_do("raspi", "enable", item="i2c", expect_ok=False)
     rb = call("GET", "/extensions/raspi")
-    ok([t for b in rb["sections"][0]["blocks"] for t in b["tiles"] if t["label"] == "Uptime"][0]["value"] == "rebooting", "panel shows rebooting")
+    ok([t for b in rb["sections"][0]["blocks"] for t in b["tiles"] if t["label"] == "Uptime"][0]["value"] == "reboot", "panel shows rebooting")
     ok(any(b["type"] == "progress" for sec in rb["sections"] for b in sec["blocks"]), "reboot shows a progress bar")
 
     def uptime_value():
         d = call("GET", "/extensions/raspi")
         return [t for b in d["sections"][0]["blocks"] for t in b["tiles"] if t["label"] == "Uptime"][0]["value"]
-    ok(wait_for(lambda: uptime_value() not in ("rebooting",), 30), "reboot finishes")
+    ok(wait_for(lambda: uptime_value() != "reboot", 30), "reboot finishes")
     ok(uptime_value().endswith("s"), f"uptime resets after the reboot, got {uptime_value()!r}")
     ok(find(ext_rows(call("GET", "/extensions/raspi"), "Boot"), id="oc")["subtitle"] == "applied", "overclock is applied after the reboot")
 
