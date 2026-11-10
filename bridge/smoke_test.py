@@ -555,7 +555,8 @@ def test_extensions():
         ok(e["icon"] in ICONS, f"{e['id']}: icon {e['icon']!r} is not in the vocabulary")
         ok(e["tone"] in TONES, f"{e['id']}: bad tone")
         ok(e.get("badge") is None or isinstance(e["badge"], int), f"{e['id']}: badge must be int or null")
-    for want in ("github", "vscode", "forge", "pogo", "deadlock", "hello", "uptime", "paperless", "syncthing"):
+    for want in ("github", "vscode", "forge", "pogo", "deadlock", "hello", "uptime", "paperless", "syncthing",
+                 "pihole", "wireguard", "raspi"):
         ok(want in ids, f"extension {want} should be served")
         ext_screen(want)
     groups = [e.get("group") for e in d["extensions"]]
@@ -570,6 +571,7 @@ def test_extensions():
     post("/extensions/hello/action", {"action": "nope"}, status=404)
 
     test_homelab_apps()     # first, because Paperless and Syncthing have timers that start at the first read
+    test_network_and_pi()
 
     # hello: text input round trip
     r = ext_do("hello", "greet", text="Ada")
@@ -708,6 +710,111 @@ def test_homelab_apps():
     ok(wait_for(lambda: all(f["tone"] == "ok" for f in ext_rows(call("GET", "/extensions/syncthing"), "Folders")), 30),
        "all folders end up to date")
     ext_do("syncthing", "rescan", item="nope", expect_ok=False)
+
+
+def test_network_and_pi():
+    print("network and Pi extensions")
+    summ = {e["id"]: e for e in call("GET", "/extensions")["extensions"]}
+    ok(summ["pihole"]["group"] == "Network" and summ["wireguard"]["group"] == "Network"
+       and summ["raspi"]["group"] == "Raspberry Pi", "network and Pi groups should be set")
+
+    # pihole: stats, pause that expires, disable with confirmation, text input
+    ph = ext_screen("pihole")
+    tiles = [t for sec in ph["sections"] for b in sec["blocks"] if b["type"] == "stats" for t in b["tiles"]]
+    ok(len(tiles) == 4, "pihole should show four stat tiles")
+    ok(len(ext_rows(ph, "Top blocked")) >= 3 and len(ext_rows(ph, "Top clients")) >= 3, "pihole top lists")
+    rq = ext_rows(ph, "Recent queries")
+    ok(len(rq) >= 5 and all(r["chips"][0]["text"] in ("allowed", "blocked") for r in rq), "recent queries carry allowed or blocked chips")
+    ok(all(r["tone"] == ("bad" if r["chips"][0]["text"] == "blocked" else "ok") for r in rq), "query tones follow the chip")
+    acts = [a for sec in ph["sections"] for b in sec["blocks"] if b["type"] == "actions" for a in b["actions"]]
+    ok(any(a["id"] == "disable" and a.get("confirm") for a in acts), "disable should ask for confirmation")
+    ok(any(a["id"] == "blocklist_add" and "input" in a for a in acts), "blocklist action takes text")
+    ext_do("pihole", "pause")
+    ok("Paused" in call("GET", "/extensions")["extensions"].__getitem__(
+        [e["id"] for e in call("GET", "/extensions")["extensions"]].index("pihole"))["summary"], "pihole summary shows the pause")
+    ok(ext_rows(call("GET", "/extensions/pihole"), "Blocking")[0]["tone"] == "warn", "paused state is a warning")
+    ok(wait_for(lambda: ext_rows(call("GET", "/extensions/pihole"), "Blocking")[0]["tone"] == "ok", 30), "pause should expire by itself")
+    ext_do("pihole", "disable")
+    ok(ext_rows(call("GET", "/extensions/pihole"), "Blocking")[0]["tone"] == "bad", "disabled state is bad")
+    ext_do("pihole", "pause", expect_ok=False)
+    ext_do("pihole", "enable")
+    ok(ext_rows(call("GET", "/extensions/pihole"), "Blocking")[0]["tone"] == "ok", "enabled again")
+    n0 = int([b for sec in call("GET", "/extensions/pihole")["sections"] if sec["title"] == "Blocklist" for b in sec["blocks"]
+              if b["type"] == "text"][0]["text"].split()[0].replace(",", ""))
+    ext_do("pihole", "blocklist_add", text="nasty.ads.example")
+    txt = [b for sec in call("GET", "/extensions/pihole")["sections"] if sec["title"] == "Blocklist" for b in sec["blocks"] if b["type"] == "text"][0]["text"]
+    ok(int(txt.split()[0].replace(",", "")) == n0 + 1 and "1 added" in txt, "blocklist count goes up by one")
+    ext_do("pihole", "blocklist_add", text="nasty.ads.example", expect_ok=False)
+    ext_do("pihole", "blocklist_add", text="not a domain", expect_ok=False)
+    ext_do("pihole", "blocklist_add", text="", expect_ok=False)
+
+    # wireguard: peers, per peer toggle, remove, add that connects by itself
+    wg = ext_screen("wireguard")
+    peers = ext_rows(wg, "Peers")
+    ok(len(peers) >= 4 and all(p["subtitle"].startswith("10.8.0.") for p in peers), "peers have addresses in the example range")
+    ok(all(any(c["text"].startswith("demo-key-") for c in p["chips"]) for p in peers), "peers show placeholder keys only")
+    ok(any(p["tone"] == "ok" for p in peers) and any(p["tone"] == "warn" for p in peers), "handshake age drives the tone")
+    ok(all([a["id"] for a in p["actions"]][1:] == ["remove"] and p["actions"][1].get("confirm") for p in peers), "remove asks first")
+    ok("PRIVATE" not in json.dumps(wg).upper().replace("NEVER SEND PRIVATE", ""), "no private key material")
+    live = next(p for p in peers if p["tone"] == "ok")
+    ext_do("wireguard", "disable", item=live["id"])
+    now_p = find(ext_rows(call("GET", "/extensions/wireguard"), "Peers"), id=live["id"])
+    ok(now_p["tone"] == "muted" and now_p["actions"][0]["label"] == "Enable", "disabled peer is muted with an Enable action")
+    ext_do("wireguard", "enable", item=live["id"])
+    ok(find(ext_rows(call("GET", "/extensions/wireguard"), "Peers"), id=live["id"])["tone"] == "ok", "enabled peer connects again")
+    ext_do("wireguard", "enable", item="nope", expect_ok=False)
+    ext_do("wireguard", "add_peer", text="", expect_ok=False)
+    ext_do("wireguard", "add_peer", text="test-phone")
+    ext_do("wireguard", "add_peer", text="Test-Phone", expect_ok=False)
+    new = find(ext_rows(call("GET", "/extensions/wireguard"), "Peers"), id="peer-test-phone")
+    ok(new and "waiting for first handshake" in new["subtitle"] and new["tone"] == "warn", "new peer waits for its first handshake")
+    ok(wait_for(lambda: find(ext_rows(call("GET", "/extensions/wireguard"), "Peers"), id="peer-test-phone")["tone"] == "ok", 30),
+       "new peer should connect by itself")
+    ext_do("wireguard", "remove", item="peer-test-phone")
+    ok(find(ext_rows(call("GET", "/extensions/wireguard"), "Peers"), id="peer-test-phone") is None, "removed peer disappears")
+    ext_do("wireguard", "remove", item="peer-test-phone", expect_ok=False)
+
+    # raspi: interface toggles, boot settings, firmware update, reboot
+    pi = ext_screen("raspi")
+    ifs = ext_rows(pi, "Interfaces")
+    ok({r["id"] for r in ifs} == {"ssh", "vnc", "i2c", "spi", "serial", "camera"}, "all six interfaces are listed")
+    ok(all(r["actions"][0]["label"] == ("Disable" if r["tone"] == "ok" else "Enable") for r in ifs), "toggle label follows the state")
+    ssh = find(ifs, id="ssh")
+    ok(ssh["actions"][0].get("confirm"), "turning SSH off asks first")
+    ext_do("raspi", "enable", item="i2c")
+    ok(find(ext_rows(call("GET", "/extensions/raspi"), "Interfaces"), id="i2c")["tone"] == "ok", "I2C is on")
+    ext_do("raspi", "disable", item="i2c")
+    ok(find(ext_rows(call("GET", "/extensions/raspi"), "Interfaces"), id="i2c")["tone"] == "muted", "I2C is off again")
+    ext_do("raspi", "enable", item="nope", expect_ok=False)
+    ext_do("raspi", "target", item="desktop")
+    ext_do("raspi", "target", item="nope", expect_ok=False)
+    ext_do("raspi", "overclock", item="modest")
+    bd = ext_rows(call("GET", "/extensions/raspi"), "Boot")
+    ok(find(bd, id="target")["chips"][0]["text"] == "desktop" and find(bd, id="oc")["chips"][0]["text"] == "modest"
+       and "reboot" in find(bd, id="oc")["subtitle"], "boot settings changed and wait for a reboot")
+    ok(find(bd, id="hostname").get("actions") is None, "hostname is read only")
+    ext_do("raspi", "update_firmware")
+    ext_do("raspi", "update_firmware", expect_ok=False)
+    fw = find(ext_rows(call("GET", "/extensions/raspi"), "System"), id="firmware")
+    ok("progress" in fw, "firmware row shows progress while updating")
+    ok(wait_for(lambda: "progress" not in find(ext_rows(call("GET", "/extensions/raspi"), "System"), id="firmware"), 30), "firmware update finishes")
+    ok(find(ext_rows(call("GET", "/extensions/raspi"), "System"), id="firmware")["tone"] == "ok", "firmware is up to date")
+    ext_do("raspi", "update_firmware", expect_ok=False)
+    pi = call("GET", "/extensions/raspi")
+    acts = [a for sec in pi["sections"] for b in sec["blocks"] if b["type"] == "actions" for a in b["actions"]]
+    ok(any(a["id"] == "reboot" and a.get("confirm") for a in acts), "reboot asks first")
+    ext_do("raspi", "reboot")
+    ext_do("raspi", "enable", item="i2c", expect_ok=False)
+    rb = call("GET", "/extensions/raspi")
+    ok([t for b in rb["sections"][0]["blocks"] for t in b["tiles"] if t["label"] == "Uptime"][0]["value"] == "rebooting", "panel shows rebooting")
+    ok(any(b["type"] == "progress" for sec in rb["sections"] for b in sec["blocks"]), "reboot shows a progress bar")
+
+    def uptime_value():
+        d = call("GET", "/extensions/raspi")
+        return [t for b in d["sections"][0]["blocks"] for t in b["tiles"] if t["label"] == "Uptime"][0]["value"]
+    ok(wait_for(lambda: uptime_value() not in ("rebooting",), 30), "reboot finishes")
+    ok(uptime_value().endswith("s"), f"uptime resets after the reboot, got {uptime_value()!r}")
+    ok(find(ext_rows(call("GET", "/extensions/raspi"), "Boot"), id="oc")["subtitle"] == "applied", "overclock is applied after the reboot")
 
 
 def main():
