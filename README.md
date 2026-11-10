@@ -31,7 +31,7 @@ All screenshots are taken against the demo bridge.
 |---|---|---|
 | <img src="docs/screenshots/setup-card.png" width="240" alt="First-run setup card asking for a bridge URL"> | <img src="docs/screenshots/overview.png" width="240" alt="Overview with alerts, WAN status and energy use"> | <img src="docs/screenshots/machine-detail.png" width="240" alt="Machine detail with vitals, tmux sessions and coding sessions"> |
 | <img src="docs/screenshots/system-services.png" width="240" alt="Docker containers with health and start, stop and restart buttons"> | <img src="docs/screenshots/terminal.png" width="240" alt="Terminal pane showing a colored tmux session"> | <img src="docs/screenshots/audit.png" width="240" alt="Audit tab with active alerts and event history"> |
-| <img src="docs/screenshots/media-library.png" width="240" alt="Media tab with the Jellyfin library as a poster grid"> | <img src="docs/screenshots/media-player.png" width="240" alt="Built-in player showing the demo test pattern with a seek bar"> | <img src="docs/screenshots/extensions-list.png" width="240" alt="Extras tab with extensions grouped under Development, Monitoring, Files, Games and Examples"> |
+| <img src="docs/screenshots/media-library.png" width="240" alt="Media tab with the Jellyfin library as a poster grid"> | <img src="docs/screenshots/media-player.png" width="240" alt="Built-in player showing the demo test pattern with a seek bar"> | <img src="docs/screenshots/extensions-list.png" width="240" alt="Extras tab with extensions grouped under Development, Agents, Monitoring, Network, Files, Apps, Games and Examples"> |
 | <img src="docs/screenshots/extension-github.png" width="240" alt="GitHub extension with pull requests and CI chips"> | <img src="docs/screenshots/extension-app-forge.png" width="240" alt="App forge extension with a running build job, progress bar and log"> | |
 
 ## Features
@@ -43,8 +43,8 @@ The bottom bar has six tabs plus Settings. Tabs and panes the bridge does not of
 - **Machines**: Detail (per-box CPU, RAM, disk, GPU, temperature, power draw and energy; for the bridge's own host also tmux sessions, coding-agent sessions, services and DNS filter stats), System (GPU and host gauges, power draw, quick actions, weekly token usage per coding-agent source, systemd services and Docker containers with start/stop/restart and logs, backup status with a run button, tailnet devices, and per-machine power controls including wake), and Term (a tmux mirror with ANSI colors, create/kill sessions, control keys, auto-resize to phone width).
 - **Home**: a curated list of entities from your home automation setup with toggles and open/close buttons, defined bridge-side, plus a Zigbee pairing toggle.
 - **Media**: browse your own Jellyfin library (a poster grid per library, search, item details with runtime and played state, what is streaming right now) and play items on the phone in a small built-in player with play/pause and a seek bar. In demo mode every item plays a generated test clip. An embedded file browser pane appears next to it once its URL is set in Settings.
-- **Extras**: integrations the bridge describes and the app draws, see "Extensions" below. The demo bridge ships nine, listed under group headers, see "Extensions" below.
-- **Settings**: bridge URL, file browser URL, wake relay, bridge host machine name, and power cost settings.
+- **Extras**: integrations the bridge describes and the app draws, see "Extensions" below. The demo bridge ships seventeen, listed under group headers.
+- **Settings**: bridge URL, file browser URL, wake relay, bridge host machine name, power cost settings, and a viewer for the last crash report.
 - **Wake-on-LAN** from the Overview and from Machines > System, plus a home-screen Quick Settings tile that wakes your host through a small always-on relay, so it works even when the bridge (and the box it lives on) is off.
 - **Home-screen widget**: stack health (services, containers, disk) refreshed by WorkManager every 30 minutes.
 - **Self-update**: opt-in and off by default. When switched on, and when the bridge advertises an update manifest, a background worker can fetch and install new versions of the app.
@@ -62,7 +62,7 @@ The bottom bar has six tabs plus Settings. Tabs and panes the bridge does not of
 
 The app is a thin client. Almost everything it shows comes from a small HTTP bridge running on your server; Control Center itself holds no business logic beyond rendering and light client-side state.
 
-- **Single activity, tabbed navigation.** `MainActivity` hosts a bottom bar (Overview, Audit, Machines, Home, Media, Extras, Settings); each is a top-level `@Composable` in its own file, with sub-panes inside Overview, Machines and Media. Apps.kt and Access.kt exist in the source but are not reachable from the navigation today.
+- **Single activity, tabbed navigation.** `MainActivity` hosts a bottom bar (Overview, Audit, Machines, Home, Media, Extras, Settings); each is a top-level `@Composable` in its own file, with sub-panes inside Overview, Machines and Media.
 - **Networking (`Api` object in `MainActivity.kt`)**: one OkHttp client, `Api.baseUrl` plus a relative path for every call, JSON in and out. The Jellyfin library, its posters and its video streams all come through the bridge's `/jellyfin/*` routes, so the phone only needs the one address. The player (`Player.kt`) is the platform `VideoView` and adds no library.
 - **Config (`AppCfg` in `Settings.kt`)**: every endpoint and tunable is a `SharedPreferences`-backed var, loaded explicitly in `MainActivity.onCreate` and again at the top of every background entry point (widget worker, Quick Settings tile, auto-update worker), because those can run in a cold process where `onCreate` never fired.
 - **Background work**: a WorkManager periodic job refreshes the home-screen widget every 30 minutes; a separate periodic job (15-minute floor) checks for and installs updates, and also drains the bridge's command queue for push-style notifications.
@@ -102,13 +102,15 @@ Control Center does not ship a backend of its own. It is a client for whatever H
 
 An extension is an integration the bridge describes and the app renders with one generic screen, so adding one needs a bridge change and no new APK. The bridge lists them at `GET /extensions`, serves each one as sections of typed blocks (stats, list, progress, text, chips, actions, link) at `GET /extensions/{id}`, and takes button presses at `POST /extensions/{id}/action`. The app refreshes the open screen on the pace the bridge asks for. Unknown block types and fields are ignored, so a newer bridge does not break an older app.
 
-The demo bridge serves twelve, all with invented data (`--extensions github,hello` picks which). The list shows them under group headers, which come from an optional `group` field in `GET /extensions`; a bridge that sends none gets a flat list.
+The demo bridge serves seventeen, all with invented data (`--extensions github,hello` picks which). The list shows them under group headers, which come from an optional `group` field in `GET /extensions`; a bridge that sends none gets a flat list.
 
 - **Development**: **GitHub** (pull requests, CI runs, merge and re-run), **VS Code** (remote sessions and tunnels), **App forge** (describe an app and watch a fake build job; in demo mode nothing is built, a real version would scaffold an Expo project and build it with a coding agent).
+- **Agents**: a workflow for handing tasks to coding agents and reviewing their work. Demo views with invented data; no agent runs. **Agent board** (tasks per agent with question, proposal and result kinds; reply, approve a proposal, close), **Sessions** (running agent sessions with a context usage bar; hand off to a fresh session, stop), **Helm** (a project board with milestones, advance, add a note) and **Vibe** (describe a change, approve the plan, watch the work log, get a pull request and run a test build).
 - **Monitoring**: **Uptime Kuma** (monitors with response times and 24 hour uptime, pause and resume).
 - **Network**: **Pi-hole** (DNS filtering stats, pause for a short while, enable or disable, add a domain to the blocklist) and **WireGuard** (VPN peers with handshake age and transfer, enable, disable, remove, add a peer).
 - **Raspberry Pi**: **Raspberry Pi** (temperature, uptime and throttling flags, SD card, interface toggles, boot and overclock settings, firmware update, reboot).
 - **Files**: **Syncthing** (folder sync state with a moving progress bar, rescan) and **Paperless** (document inbox, a consume queue, mark reviewed).
+- **Apps**: **Managed apps** (a demo view of small invented apps the phone keeps current from the bridge: versions, sizes, update with progress, check for updates).
 - **Games**: **Pogo raids** (sample raid bosses and events with made-up dates; a real version would read a public community event feed) and **Deadlock** (a draft-advisor overlay switch, suggested picks, recent matches, all sample numbers).
 - **Examples**: **Hello**, the 20-line example.
 

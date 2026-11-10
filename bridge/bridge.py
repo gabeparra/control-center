@@ -1326,26 +1326,6 @@ async def apps_managed():
     return {"apps": []}
 
 
-@app.get("/archive/{key}")
-async def archive(key: str):
-    return {"versions": []}
-
-
-@app.get("/access/pending")
-async def access_pending():
-    return {"pending": []}
-
-
-@app.get("/access/devices")
-async def access_devices():
-    return {"devices": []}
-
-
-@app.post("/access/{verb}/{item}")
-async def access_act(verb: str, item: str):
-    return {"ok": True}
-
-
 # --- jellyfin proxy ---------------------------------------------------------------
 @app.get("/jellyfin/status")
 async def jf_status():
@@ -1475,8 +1455,8 @@ class ExtError(Exception):
 
 
 EXT_CLASSES: dict[str, type] = {}
-DEFAULT_EXTENSIONS = ["github", "vscode", "forge", "uptime", "pihole", "wireguard", "raspi",
-                      "syncthing", "paperless", "pogo", "deadlock", "hello"]
+DEFAULT_EXTENSIONS = ["github", "vscode", "forge", "board", "sessions", "helm", "vibe", "uptime", "pihole",
+                      "wireguard", "raspi", "syncthing", "paperless", "apps", "pogo", "deadlock", "hello"]
 EXTENSIONS: dict[str, "Ext"] = {}       # the ones this process serves, in order
 
 
@@ -2495,6 +2475,536 @@ class RaspberryPi(Ext):
                 raise ExtError("Unknown preset.")
             self.oc_set, self.reboot_needed = item, True
             return f"Overclock set to {item}, reboot to apply"
+        raise ValueError(action)
+
+
+# ------------------------------------------------------------ agents ----
+# A workflow for handing work to coding agents and reviewing what they did:
+# a board of tasks, the running sessions, a project board, and a describe,
+# approve, pull request, test build flow. Everything is invented and held in
+# memory. No agent runs, nothing is built, and the replies are canned lines.
+BOARD_REPLY_S = 4.0         # how long an agent takes to answer a reply
+BOARD_WORK_S = 6.0          # how long an approved proposal takes to finish
+HANDOFF_S = 5.0            # how long a session takes to write its note and restart
+
+
+@extension
+class AgentBoard(Ext):
+    """Tasks handed to coding agents. Reply, approve a proposal, or close a task."""
+    id, name, icon, group = "board", "Agent board", "list", "Agents"
+    refresh_s = 3
+    KIND_TONE = {"question": "warn", "proposal": "muted", "result": "ok"}
+    STATE_TONE = {"waiting": "warn", "working": "muted", "review": "ok", "done": "muted"}
+    FOLLOW_UPS = ["Thanks, that settles it. I am carrying on with that.",
+                  "Got it. I changed course and the tests still pass.",
+                  "Understood. I will note it in the pull request."]
+
+    def __init__(self):
+        t = now()
+        self.touched: str | None = None
+        self.n_replies = 0
+        self.tasks = [
+            self._task("t-sync", "Sync keeps dropping the last file", "builder", "question", "waiting", 1,
+                       [("builder", "Sync stops one file short on large folders. Retry the last file, or skip it and log it?", t - 1500)]),
+            self._task("t-theme", "Dark theme for the energy card", "reviewer", "proposal", "waiting", 1,
+                       [("reviewer", "Plan: add a theme token set, switch the card to it, update two screenshots. Approve?", t - 2400)]),
+            self._task("t-docs", "Rewrite the install notes", "docs", "result", "review", 2,
+                       [("docs", "Draft is ready in docs/install.md.", t - 5400),
+                        ("docs", "I also fixed three broken links.", t - 5000)]),
+            self._task("t-lint", "Fix lint warnings in the bridge", "builder", "result", "done", 0,
+                       [("builder", "All 14 warnings fixed, tests pass.", t - 9000), ("you", "Thanks.", t - 8800)]),
+            self._task("t-cache", "Cache the container list", "reviewer", "result", "done", 0,
+                       [("reviewer", "Added a 5 second cache. Merged.", t - 20000)]),
+        ]
+        self.touched = "t-sync"
+
+    @staticmethod
+    def _task(id, title, agent, kind, state, unread, thread):
+        return {"id": id, "title": title, "agent": agent, "kind": kind, "state": state,
+                "unread": unread, "thread": list(thread), "reply_at": None, "finish_at": None,
+                "done_today": state == "done"}
+
+    def _settle(self):
+        t = now()
+        for k in self.tasks:
+            if k["reply_at"] and t >= k["reply_at"]:
+                k["reply_at"] = None
+                k["thread"].append((k["agent"], self.FOLLOW_UPS[self.n_replies % len(self.FOLLOW_UPS)], t))
+                self.n_replies += 1
+                k["unread"] += 1
+            if k["finish_at"] and t >= k["finish_at"]:
+                k["finish_at"] = None
+                k["state"], k["kind"] = "done", "result"
+                k["done_today"] = True
+                k["unread"] += 1
+                k["thread"].append((k["agent"], "Done. Changes are merged and the checks passed.", t))
+
+    def _task_by(self, item):
+        k = next((k for k in self.tasks if k["id"] == item), None)
+        if not k:
+            raise ExtError("That task is gone.")
+        if k["state"] == "done":
+            raise ExtError("That task is already closed.")
+        return k
+
+    def card(self):
+        self._settle()
+        waiting = sum(1 for k in self.tasks if k["state"] == "waiting")
+        opened = sum(1 for k in self.tasks if k["state"] != "done")
+        return f"{opened} open, {waiting} waiting on you", waiting or None, "warn" if waiting else "ok"
+
+    def sections(self):
+        self._settle()
+        t = now()
+        rank = {"waiting": 0, "review": 1, "working": 2, "done": 3}
+        out_rows = []
+        for k in sorted(self.tasks, key=lambda k: (rank[k["state"]], -k["thread"][-1][2])):
+            who, text, at = k["thread"][-1]
+            acts = []
+            if k["state"] != "done":
+                acts.append(btn("reply", "Reply", item=k["id"],
+                                input={"label": f"Reply to {k['agent']}", "placeholder": "Go ahead"}))
+                if k["kind"] == "proposal" and k["state"] == "waiting":
+                    acts.append(btn("approve", "Approve", "primary", item=k["id"]))
+                acts.append(btn("done", "Done", item=k["id"]))
+            out_rows.append(row(
+                k["id"], k["title"], f"{who}: {text}"[:90],
+                f"{k['unread']} new" if k["unread"] else ago(t - at),
+                self.STATE_TONE[k["state"]],
+                [chip(k["agent"], "muted"), chip(k["kind"], self.KIND_TONE[k["kind"]]),
+                 chip({"waiting": "waiting on you", "working": "in progress", "review": "ready",
+                       "done": "done"}[k["state"]], self.STATE_TONE[k["state"]])],
+                progress=(1 - (k["finish_at"] - t) / BOARD_WORK_S) * 100 if k["finish_at"] else None, actions=acts))
+        waiting = sum(1 for k in self.tasks if k["state"] == "waiting")
+        out = [
+            section("Overview", {"type": "stats", "tiles": [
+                stat("Open", sum(1 for k in self.tasks if k["state"] != "done")),
+                stat("Waiting on you", waiting, "warn" if waiting else "ok"),
+                stat("Done today", sum(1 for k in self.tasks if k["done_today"]), "ok")]}),
+            section("Tasks", {"type": "list", "items": out_rows}),
+        ]
+        last = next((k for k in self.tasks if k["id"] == self.touched), None)
+        if last:
+            out.append(section(f"Thread: {last['title']}", *[
+                {"type": "text", "text": f"{who}, {ago(t - at)}\n{text}"} for who, text, at in last["thread"][-5:]]))
+        return out
+
+    def act(self, action, item, text):
+        self._settle()
+        if action == "reply":
+            msg = clean(text or "").strip()
+            if not msg:
+                raise ExtError("Write a reply first.")
+            k = self._task_by(item)
+            k["thread"].append(("you", msg[:200], now()))
+            k["unread"] = 0
+            k["reply_at"] = now() + BOARD_REPLY_S
+            if k["state"] == "waiting":
+                k["state"] = "working"
+            self.touched = k["id"]
+            return f"Sent to {k['agent']}"
+        if action == "approve":
+            k = self._task_by(item)
+            if k["kind"] != "proposal" or k["state"] != "waiting":
+                raise ExtError("Only an open proposal can be approved.")
+            k["state"] = "working"
+            k["unread"] = 0
+            k["thread"].append(("you", "Approved.", now()))
+            k["finish_at"] = now() + BOARD_WORK_S
+            self.touched = k["id"]
+            add_event("action", f"board: approved {k['title']}")
+            return f"Approved, {k['agent']} is on it"
+        if action == "done":
+            k = self._task_by(item)
+            k.update(state="done", unread=0, reply_at=None, finish_at=None, done_today=True)
+            k["thread"].append(("you", "Closed.", now()))
+            self.touched = k["id"]
+            return "Task closed"
+        raise ValueError(action)
+
+
+@extension
+class AgentSessions(Ext):
+    """Running coding-agent sessions and how full their context window is."""
+    id, name, icon, group = "sessions", "Sessions", "terminal", "Agents"
+    refresh_s = 4
+    NOTES = {"goal": ["finish the log tail fix", "ship the dark theme", "move the docs to the new layout"],
+             "done": ["tests written and passing", "two screens restyled", "nine pages moved"],
+             "next": ["review the pull request", "update the screenshots", "fix the last broken link"]}
+
+    def __init__(self):
+        t = now()
+        self.seq = 0
+        self.notes: list[dict] = []
+        self.sessions = [
+            self._new("builder-1", "atlas", "homelab-bridge", t - 9300, 91, 0.04, 0),
+            self._new("reviewer-1", "workbench", "dashboard-ui", t - 4100, 68, 0.05, 1),
+            self._new("docs-1", "pi-lab", "install-notes", t - 1500, 24, 0.06, 2),
+        ]
+
+    def _new(self, name, machine, project, started, ctx, rate, note):
+        self.seq += 1
+        return {"id": f"ses-{self.seq}", "name": name, "machine": machine, "project": project,
+                "started": started, "ctx0": ctx, "ctx_t": now(), "rate": rate, "note": note,
+                "handoff_at": None}
+
+    @staticmethod
+    def _ctx(s):
+        return min(99.0, s["ctx0"] + s["rate"] * (now() - s["ctx_t"]))
+
+    @staticmethod
+    def _tone(pct):
+        return "ok" if pct < 60 else "warn" if pct < 85 else "bad"
+
+    def _settle(self):
+        t = now()
+        for s in list(self.sessions):
+            if s["handoff_at"] and t >= s["handoff_at"]:
+                base, _, n = s["name"].rpartition("-")
+                fresh = self._new(f"{base}-{int(n) + 1}", s["machine"], s["project"], t, 6, s["rate"], s["note"])
+                self.sessions[self.sessions.index(s)] = fresh
+
+    def card(self):
+        self._settle()
+        hot = sum(1 for s in self.sessions if self._ctx(s) >= 85)
+        s = f"{len(self.sessions)} running"
+        if hot:
+            s += f", {hot} near the context limit"
+        return s, hot or None, "bad" if hot else "ok"
+
+    def sections(self):
+        self._settle()
+        t = now()
+        rows = []
+        for s in self.sessions:
+            pct = self._ctx(s)
+            tone = self._tone(pct)
+            writing = bool(s["handoff_at"])
+            acts = [] if writing else [
+                btn("handoff", "Hand off", item=s["id"],
+                    confirm=f"Ask {s['name']} to write a handoff note and restart with a fresh context?"),
+                btn("stop", "Stop", "danger", item=s["id"], confirm=f"Stop {s['name']}?")]
+            rows.append(row(s["id"], s["name"], f"{s['project']} on {s['machine']}", dur(t - s["started"]),
+                            "warn" if writing else tone,
+                            [chip("writing handoff note", "warn") if writing else chip(f"context {int(pct)}%", tone),
+                             chip(s["machine"])],
+                            progress=pct, actions=acts))
+        hot = sum(1 for s in self.sessions if self._ctx(s) >= 85)
+        out = [
+            section("Overview", {"type": "stats", "tiles": [
+                stat("Running", len(self.sessions)),
+                stat("Near the limit", hot, "bad" if hot else "ok"),
+                stat("Machines", len({s["machine"] for s in self.sessions}))]}),
+            section("Sessions", {"type": "list", "items": rows}),
+        ]
+        for n in self.notes[:2]:
+            out.append(section(f"Handoff note: {n['name']}", {"type": "text", "mono": True, "text": n["text"]}))
+        return out
+
+    def act(self, action, item, text):
+        self._settle()
+        s = next((s for s in self.sessions if s["id"] == item), None)
+        if action not in ("handoff", "stop"):
+            raise ValueError(action)
+        if not s:
+            raise ExtError("That session is gone.")
+        if s["handoff_at"]:
+            raise ExtError("It is already writing a handoff note.")
+        if action == "stop":
+            self.sessions.remove(s)
+            add_event("action", f"sessions: stopped {s['name']}")
+            return f"Stopped {s['name']}"
+        i = s["note"]
+        body = (f"Handoff from {s['name']} ({s['project']} on {s['machine']})\n"
+                f"Goal: {self.NOTES['goal'][i]}\nDone: {self.NOTES['done'][i]}\n"
+                f"Next: {self.NOTES['next'][i]}\nContext used: {int(self._ctx(s))}%")
+        self.notes.insert(0, {"name": s["name"], "text": body})
+        s["handoff_at"] = now() + HANDOFF_S
+        return f"{s['name']} is writing its note"
+
+
+@extension
+class Helm(Ext):
+    """A small project board: milestones, how far the current one is, a note per project."""
+    id, name, icon, group = "helm", "Helm", "map", "Agents"
+
+    def __init__(self):
+        self.projects = [
+            {"id": "p-bridge", "name": "Homelab bridge", "status": "ok", "line": "Log tail fix is in review",
+             "ms": ["Core API", "Extensions", "Agent screens", "Release"], "cur": 2, "pct": 55},
+            {"id": "p-dash", "name": "Dashboard UI", "status": "warn", "line": "Waiting on the dark theme decision",
+             "ms": ["Layout", "Energy card", "Dark theme"], "cur": 1, "pct": 80},
+            {"id": "p-notes", "name": "Install notes", "status": "ok", "line": "Rewrite is two thirds done",
+             "ms": ["Outline", "Draft", "Review"], "cur": 1, "pct": 66},
+            {"id": "p-lab", "name": "Pi lab", "status": "bad", "line": "Board is not booting, needs a new card",
+             "ms": ["Wiring", "Monitoring"], "cur": 0, "pct": 20},
+        ]
+
+    def card(self):
+        bad = sum(1 for p in self.projects if p["status"] != "ok")
+        return f"{len(self.projects)} projects, {bad} need attention", bad or None, "warn" if bad else "ok"
+
+    def sections(self):
+        rows = []
+        for p in self.projects:
+            chips = []
+            for i, m in enumerate(p["ms"]):
+                chips.append(chip(m, "ok") if i < p["cur"] else
+                             chip("now: " + m, "warn") if i == p["cur"] else chip(m, "muted"))
+            finished = p["cur"] >= len(p["ms"])
+            acts = [btn("note", "Add note", item=p["id"], input={"label": "One line state", "placeholder": "Waiting on review"})]
+            if not finished:
+                acts.insert(0, btn("advance", "Advance", "primary", item=p["id"]))
+            rows.append(row(p["id"], p["name"], p["line"],
+                            "done" if finished else f"milestone {p['cur'] + 1} of {len(p['ms'])}",
+                            p["status"], chips, progress=100 if finished else p["pct"], actions=acts))
+        att = sum(1 for p in self.projects if p["status"] != "ok")
+        return [section("Overview", {"type": "stats", "tiles": [
+                    stat("Projects", len(self.projects)),
+                    stat("On track", len(self.projects) - att, "ok"),
+                    stat("Need attention", att, "warn" if att else "ok")]}),
+                section("Projects", {"type": "list", "items": rows})]
+
+    def act(self, action, item, text):
+        p = next((p for p in self.projects if p["id"] == item), None)
+        if action not in ("advance", "note"):
+            raise ValueError(action)
+        if not p:
+            raise ExtError("That project is gone.")
+        if action == "note":
+            line = clean(text or "").strip()
+            if not line:
+                raise ExtError("Write the note first.")
+            p["line"] = line[:100]
+            return "Note saved"
+        if p["cur"] >= len(p["ms"]):
+            raise ExtError("Every milestone is already done.")
+        done = p["ms"][p["cur"]]
+        p["cur"] += 1
+        p["pct"] = 0
+        if p["cur"] >= len(p["ms"]):
+            p["line"] = "All milestones done"
+        else:
+            p["status"] = "ok"
+        return f"Completed {done}"
+
+
+VIBE_STEPS = [(0.0, "[agent] reading the repository"), (1.5, "[agent] editing 3 files"),
+              (3.5, "[tests] running unit tests"), (5.5, "[tests] 42 passed"),
+              (6.5, "[git] pushing the branch"), (8.0, "[pr] opened a pull request")]
+VIBE_WORK_S = 9.0
+VIBE_BUILD_STEPS = [(0.0, "[build] checking out the branch"), (1.5, "[build] compiling"),
+                    (3.5, "[build] signing a debug build"), (4.5, "[install] sending it to the phone")]
+VIBE_BUILD_S = 6.0
+
+
+@extension
+class Vibe(Ext):
+    """Describe a change, approve the plan, an agent works, a pull request appears, test build it.
+
+    Separate from Forge on purpose: Forge makes a new app from nothing, this changes an
+    existing repository and ends in a pull request."""
+    id, name, icon, group = "vibe", "Vibe", "bolt", "Agents"
+    refresh_s = 2
+    REPOS = [("fernwood/homelab-bridge", ("bridge", "api", "server", "log", "sync")),
+             ("fernwood/dashboard-ui", ())]
+
+    def __init__(self):
+        self.next_pr = 53
+        self.seq = 0
+        self.changes: list[dict] = []       # proposals and work in flight: proposed, working
+        self.prs = [{"id": "pr-52", "repo": "fernwood/dashboard-ui", "n": 52,
+                     "title": "Add compact mode to the energy card", "state": "open", "t0": None}]
+
+    def _settle(self):
+        t = now()
+        for c in list(self.changes):
+            if c["state"] == "working" and t - c["t0"] >= VIBE_WORK_S:
+                self.changes.remove(c)
+                self.prs.insert(0, {"id": f"pr-{self.next_pr}", "repo": c["repo"], "n": self.next_pr,
+                                    "title": c["title"], "state": "open", "t0": None})
+                self.next_pr += 1
+        for p in self.prs:
+            if p["state"] == "building" and t - p["t0"] >= VIBE_BUILD_S:
+                p["state"] = "installed"
+
+    def _working(self):
+        return next((c for c in self.changes if c["state"] == "working"), None)
+
+    def _building(self):
+        return next((p for p in self.prs if p["state"] == "building"), None)
+
+    def card(self):
+        self._settle()
+        w, b = self._working(), self._building()
+        if w:
+            return f"Working on: {w['title']}", None, "warn"
+        if b:
+            return f"Building #{b['n']}", None, "warn"
+        props = sum(1 for c in self.changes if c["state"] == "proposed")
+        return f"{props} proposals, {len(self.prs)} open pull requests", props or None, "ok"
+
+    def sections(self):
+        self._settle()
+        t = now()
+        out = [section(
+            "Describe a change",
+            {"type": "text", "text": "Say what should change. An agent proposes a short plan, you approve it, "
+                                     "it does the work and opens a pull request you can test on the phone."},
+            {"type": "actions", "actions": [btn("propose", "Propose", "primary", input={
+                "label": "Describe the change", "placeholder": "Add a compact mode to the energy card"})]})]
+        for c in self.changes:
+            if c["state"] == "proposed":
+                out.append(section(f"Proposal: {c['title']}",
+                                   {"type": "text", "text": c["plan"]},
+                                   {"type": "list", "items": [row(
+                                       c["id"], c["title"], c["repo"], "waiting for you", "warn",
+                                       [chip("proposal", "warn")],
+                                       actions=[btn("approve", "Approve", "primary", item=c["id"]),
+                                                btn("discard", "Discard", item=c["id"])])]}))
+        w = self._working()
+        if w:
+            el = t - w["t0"]
+            out.append(section(f"Working: {w['title']}",
+                               {"type": "progress", "label": "Agent at work", "value": el / VIBE_WORK_S * 100, "tone": "warn"},
+                               {"type": "text", "mono": True, "text": "\n".join(l for at, l in VIBE_STEPS if el >= at)}))
+        rows = []
+        for p in self.prs:
+            building = p["state"] == "building"
+            tone = "warn" if building else "ok" if p["state"] == "installed" else "muted"
+            acts = [btn("build", "Test build", "primary", item=p["id"])] if p["state"] == "open" else []
+            rows.append(row(p["id"], p["title"], f"{p['repo']}#{p['n']}",
+                            "building" if building else "build installed" if p["state"] == "installed" else "open",
+                            tone, [chip("build installed" if p["state"] == "installed" else "open", tone)],
+                            progress=(t - p["t0"]) / VIBE_BUILD_S * 100 if building else None, actions=acts))
+        out.append(section("Pull requests", {"type": "list", "items": rows}))
+        b = self._building()
+        if b:
+            el = t - b["t0"]
+            out.append(section(f"Test build: #{b['n']}",
+                               {"type": "progress", "label": "Build", "value": el / VIBE_BUILD_S * 100, "tone": "warn"},
+                               {"type": "text", "mono": True, "text": "\n".join(l for at, l in VIBE_BUILD_STEPS if el >= at)}))
+        elif any(p["state"] == "installed" for p in self.prs):
+            out.append(section("Test build", {"type": "text", "mono": True,
+                                              "text": "[build] done\n[install] build installed"}))
+        out.append(section("About", {"type": "text", "mono": True, "text":
+                                     "Demo mode: no agent runs and nothing is built.\n"
+                                     "The plan, the logs and the pull requests are canned."}))
+        return out
+
+    def act(self, action, item, text):
+        self._settle()
+        if action == "propose":
+            desc = clean(text or "").strip()
+            if not desc:
+                raise ExtError("Describe the change first.")
+            low = desc.lower()
+            repo = next((r for r, keys in self.REPOS if any(k in low for k in keys)), self.REPOS[-1][0])
+            self.seq += 1
+            title = desc[:60].rstrip(" .").capitalize()
+            plan = (f"Plan for {repo}\n1. Find the code behind: {desc[:60]}\n2. Make the change in a new branch\n"
+                    "3. Add or update tests\n4. Open a pull request for review\nExpected size: 3 files, about 80 lines.")
+            self.changes.append({"id": f"chg-{self.seq}", "title": title, "repo": repo, "plan": plan,
+                                 "state": "proposed", "t0": None})
+            return "Proposal ready"
+        if action in ("approve", "discard"):
+            c = next((c for c in self.changes if c["id"] == item and c["state"] == "proposed"), None)
+            if not c:
+                raise ExtError("That proposal is gone.")
+            if action == "discard":
+                self.changes.remove(c)
+                return "Proposal discarded"
+            if self._working():
+                raise ExtError("An agent is already at work. Wait for its pull request.")
+            c.update(state="working", t0=now())
+            return "Approved, the agent is starting"
+        if action == "build":
+            p = next((p for p in self.prs if p["id"] == item), None)
+            if not p:
+                raise ExtError("That pull request is gone.")
+            if p["state"] != "open":
+                raise ExtError("This pull request already has a build.")
+            if self._building():
+                raise ExtError("Another build is running.")
+            p.update(state="building", t0=now())
+            return f"Building #{p['n']}"
+        raise ValueError(action)
+
+
+@extension
+class ManagedApps(Ext):
+    """Small apps this phone keeps current from the bridge. Invented names and versions."""
+    id, name, icon, group = "apps", "Managed apps", "cloud", "Apps"
+    refresh_s = 2
+    UPDATE_S = 5.0
+
+    def __init__(self):
+        self.apps = [
+            {"id": "notes", "name": "Pocket Notes", "inst": (1, 4, 2), "avail": (1, 5, 0), "mb": 8.4, "t0": None},
+            {"id": "reps", "name": "Rep Counter", "inst": (2, 0, 1), "avail": (2, 0, 1), "mb": 12.1, "t0": None},
+            {"id": "recipes", "name": "Recipe Box", "inst": (0, 9, 3), "avail": (0, 9, 3), "mb": 6.7, "t0": None},
+        ]
+
+    @staticmethod
+    def _v(v):
+        return ".".join(map(str, v))
+
+    def _settle(self):
+        for a in self.apps:
+            if a["t0"] and now() - a["t0"] >= self.UPDATE_S:
+                a.update(inst=a["avail"], t0=None)
+
+    def _pending(self):
+        return [a for a in self.apps if a["avail"] != a["inst"]]
+
+    def card(self):
+        self._settle()
+        n = len(self._pending())
+        return (f"{n} update{'' if n == 1 else 's'} available" if n else "All apps up to date"), n or None, "warn" if n else "ok"
+
+    def sections(self):
+        self._settle()
+        t = now()
+        rows = []
+        for a in self.apps:
+            busy = bool(a["t0"])
+            behind = a["avail"] != a["inst"]
+            el = t - a["t0"] if busy else 0
+            state = ("downloading" if el < self.UPDATE_S * 0.6 else "installing") if busy else \
+                "update available" if behind else "up to date"
+            tone = "warn" if behind else "ok"
+            rows.append(row(a["id"], a["name"],
+                            f"installed {self._v(a['inst'])}" + (f", available {self._v(a['avail'])}" if behind else ""),
+                            f"{a['mb']:.1f} MB", tone, [chip(state, tone)],
+                            progress=el / self.UPDATE_S * 100 if busy else None,
+                            actions=[btn("update", "Update", "primary", item=a["id"])] if behind and not busy else None))
+        n = len(self._pending())
+        return [section("Overview", {"type": "stats", "tiles": [
+                    stat("Apps", len(self.apps)), stat("Updates", n, "warn" if n else "ok")]}),
+                section("Apps", {"type": "list", "items": rows}),
+                section("Check", {"type": "actions", "actions": [btn("check", "Check for updates")]}),
+                section("About", {"type": "text", "mono": True, "text":
+                                  "Demo mode: these are invented apps. Updating only moves a version number."})]
+
+    def act(self, action, item, text):
+        self._settle()
+        if action == "update":
+            a = next((a for a in self.apps if a["id"] == item), None)
+            if not a:
+                raise ExtError("No such app.")
+            if a["t0"]:
+                raise ExtError("It is already updating.")
+            if a["avail"] == a["inst"]:
+                raise ExtError("It is already up to date.")
+            a["t0"] = now()
+            return f"Updating {a['name']}"
+        if action == "check":
+            a = next((a for a in self.apps if a["avail"] == a["inst"]), None)
+            if not a:
+                return "No new updates"
+            major, minor, patch = a["inst"]
+            a.update(avail=(major, minor + 1, 0), mb=round(a["mb"] + 0.6, 1))
+            return f"Update found for {a['name']}"
         raise ValueError(action)
 
 

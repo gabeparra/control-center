@@ -27,7 +27,7 @@ Options:
 | `--demo` | required | Serve invented data. Without it the script prints a message and exits with an error. |
 | `--host` | `127.0.0.1` | Address to listen on. Use `0.0.0.0` to reach it from another device. |
 | `--port` | `8790` | Port to listen on. |
-| `--extensions a,b,c` | all nine | Which [extensions](#extensions) to serve, for example `--extensions github,hello` or `--extensions github,uptime`. Known ids: `github, vscode, forge, uptime, syncthing, paperless, pogo, deadlock, hello`. Unknown names are rejected. |
+| `--extensions a,b,c` | all seventeen | Which [extensions](#extensions) to serve, for example `--extensions github,hello` or `--extensions github,uptime`. Known ids: `github, vscode, forge, board, sessions, helm, vibe, uptime, pihole, wireguard, raspi, syncthing, paperless, apps, pogo, deadlock, hello`. Unknown names are rejected. |
 | `--features a,b,c` | all demo features | Override the list advertised by `/capabilities`, so you can see tabs hide. Unknown names are rejected. |
 
 State is kept in memory. Restarting the process puts everything back.
@@ -116,7 +116,7 @@ The app shows the **Extras** tab only when `/capabilities` lists `extensions`.
 A bridge with no `/capabilities` at all never gets the tab, because an older
 bridge cannot have `/extensions`.
 
-The demo serves twelve, all with invented data and in-memory state. None of them
+The demo serves seventeen, all with invented data and in-memory state. None of them
 calls a real service, runs a command or touches the network:
 
 | Id | Shows | Actions |
@@ -124,6 +124,11 @@ calls a real service, runs a command or touches the network:
 | `github` | Open pull requests with CI and review chips, recent workflow runs | Merge an approved PR (asks first), re-run a failed run. A running run finishes after a few seconds. |
 | `vscode` | Remote editor sessions on the demo machines, tunnel up or down | Start or stop a tunnel. Starting one on an offline machine is refused. A link opens a placeholder editor page served by the bridge. |
 | `forge` | Small apps with status chips, and a build job with a progress bar and a growing log | "Describe the app" text input starts a build that runs about 13 seconds, then the app is ready and gets a link to a static preview page. Retry and delete. |
+| `board` | Group Agents. A task board for work handed to coding agents: open, waiting on you and done today counts, tasks with the owning agent (builder, reviewer, docs) and kind (question, proposal, result) as chips, unread replies as meta, and the thread of the task touched last | "Reply" (text input; the unread count clears and the agent answers after about 4 seconds), "Approve" on a proposal (in progress, done with a result line after about 6 seconds), "Done". |
+| `sessions` | Group Agents. Running coding-agent sessions with machine, project, run time and a context usage bar that turns warn, then bad as it fills and creeps up between refreshes | "Hand off" (asks first; the session writes a handoff note, shown on the screen, and a fresh low-context session replaces it after about 5 seconds), "Stop" (asks first). |
+| `helm` | Group Agents. A project board: a status dot, a one line state, milestone chips (done, now, next) and a progress bar for the current milestone | "Advance" completes the current milestone and resets the bar, "Add note" (text input) replaces the state line. |
+| `vibe` | Group Agents. Describe a change, get a canned plan, approve it, watch a progress bar and a growing log, then a pull request appears | "Propose" (text input), Approve or Discard a proposal, "Test build" on a pull request (about 6 seconds with progress, ends in "build installed"). One agent and one build at a time. |
+| `apps` | Group Apps. Small invented apps the phone keeps current from the bridge: installed and available version, size, "up to date" or "update available" | "Update" (about 5 seconds, downloading then installing, then the new version), "Check for updates" makes one more update appear. |
 | `pogo` | Sample raid bosses and events for a mobile game, events live now and upcoming | None. Information only. |
 | `deadlock` | Status of a draft-advisor overlay on a gaming PC, suggested picks with win-rate chips, last matches | Start and stop the overlay. |
 | `uptime` | Uptime monitors with up or down tone, response time and a 24 hour uptime bar; one is down | Pause and resume a monitor. |
@@ -134,7 +139,7 @@ calls a real service, runs a command or touches the network:
 | `raspi` | Group Raspberry Pi. The demo Pi's health and settings: model, CPU temperature, uptime, firmware state, power and throttling flags, SD card usage and wear, interface toggles (SSH, VNC, I2C, SPI, serial, camera), boot target, hostname (read only), overclock preset | Enable or disable each interface, change boot target and overclock (applied after a reboot), "Update firmware" (about 10 seconds with a progress bar), Reboot (asks first; shows "rebooting" for about 8 seconds, then uptime restarts). |
 | `hello` | A counter | Greet, with a text input. The example used below. |
 
-Honest limits: in `forge` nothing is created or built. The scaffold-an-Expo-project-and-build-it-with-a-coding-agent flow is
+Honest limits: `board`, `sessions`, `helm`, `vibe` and `apps` are demo views. No agent runs, nothing is built or installed, and the replies, plans and logs are canned text. `vibe` is separate from `forge` because forge makes a new app from nothing while vibe changes an existing repository and ends in a pull request. In `forge` nothing is created or built. The scaffold-an-Expo-project-and-build-it-with-a-coding-agent flow is
 only described, and the log and preview page are canned text. `pogo` uses made-up dates and
 a few well-known creature names; a real version would read a public community event feed. `deadlock`
 numbers are invented too. The homelab apps (`uptime`, `paperless`, `syncthing`) are demo views with invented
@@ -318,8 +323,7 @@ then hands the URL to the platform `VideoView`.
 | GET | `/commands/controlcenter` | Background worker, every 15 min | `commands[]` of `action`, `args`. The app handles `notify` and `update-apps`. The demo drains the queue on read. | Optional |
 | POST | `/versions` | App after start or update | Sends `{device, apps}` | Optional |
 | GET | `/phone/version.json` | Self-update check | `versionCode`, `versionName`, `url`, `notes`, `sha256`, `size`. The demo answers 404 on purpose. | Optional (feature `updater`) |
-| GET | `/apps/managed` | Background worker | `apps[]` of `name`, `packageName`, `manifestUrl`, `archivePrefix`. The demo returns an empty list. | Optional |
-| GET | `/archive/{key}`, `/access/pending`, `/access/devices`, POST `/access/{approve,deny,revoke}/{id}` | Screens that are not reachable from the navigation today | The demo returns empty lists | Unused |
+| GET | `/apps/managed` | Background worker | `apps[]` of `name`, `packageName`, `manifestUrl`. The demo returns an empty list. | Optional |
 
 ### Direct third-party calls (not the bridge)
 

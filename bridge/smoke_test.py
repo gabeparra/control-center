@@ -397,10 +397,11 @@ def test_commands():
     code, _, _ = request("GET", "/phone/version.json")
     ok(code == 404, "demo should not serve /phone/version.json")
     get("/apps/managed", {"apps": L({"name": str})})
-    get("/archive/anything", {"versions": L({"versionCode": int})})
-    get("/access/pending", {"pending": L({"id": str})})
-    get("/access/devices", {"devices": L({"id": str})})
-    post("/access/approve/x", {}, {"ok": bool})
+    for gone in ("/archive/anything", "/access/pending", "/access/devices"):
+        code, _, _ = request("GET", gone)
+        ok(code == 404, f"{gone} belonged to a removed screen and should be gone")
+    code, _, _ = request("POST", "/access/approve/x", body={})
+    ok(code in (404, 405), "POST /access/approve/x should be gone")
 
 
 def test_jellyfin():
@@ -556,7 +557,7 @@ def test_extensions():
         ok(e["tone"] in TONES, f"{e['id']}: bad tone")
         ok(e.get("badge") is None or isinstance(e["badge"], int), f"{e['id']}: badge must be int or null")
     for want in ("github", "vscode", "forge", "pogo", "deadlock", "hello", "uptime", "paperless", "syncthing",
-                 "pihole", "wireguard", "raspi"):
+                 "pihole", "wireguard", "raspi", "board", "sessions", "helm", "vibe", "apps"):
         ok(want in ids, f"extension {want} should be served")
         ext_screen(want)
     groups = [e.get("group") for e in d["extensions"]]
@@ -570,8 +571,11 @@ def test_extensions():
     post("/extensions/hello/action", {}, status=400)
     post("/extensions/hello/action", {"action": "nope"}, status=404)
 
+    ok(ids[3:7] == ["board", "sessions", "helm", "vibe"] and groups[3:7] == ["Agents"] * 4,
+       "the Agents group should follow Development")
     test_homelab_apps()     # first, because Paperless and Syncthing have timers that start at the first read
     test_network_and_pi()
+    test_agents()
 
     # hello: text input round trip
     r = ext_do("hello", "greet", text="Ada")
@@ -667,6 +671,163 @@ def test_extensions():
     ext_do("deadlock", "stop")
     ok(len(ext_rows(ext_screen("deadlock"), "Suggested")) == 0, "picks should hide again after stop")
 
+
+
+def texts(d, title_start):
+    return [b["text"] for sec in (d or {}).get("sections", []) if sec["title"].startswith(title_start)
+            for b in sec["blocks"] if b["type"] == "text"]
+
+
+def tile(d, label):
+    return [t for sec in d["sections"] for b in sec["blocks"] if b["type"] == "stats" for t in b["tiles"]
+            if t["label"] == label][0]["value"]
+
+
+def test_agents():
+    print("agents and apps extensions")
+    summ = {e["id"]: e for e in call("GET", "/extensions")["extensions"]}
+    for eid in ("board", "sessions", "helm", "vibe"):
+        ok(summ[eid]["group"] == "Agents", f"{eid} belongs to the Agents group")
+    ok(summ["apps"]["group"] == "Apps", "apps is in the Apps group")
+
+    # board
+    bd = ext_screen("board")
+    tasks = ext_rows(bd, "Tasks")
+    ok(len(tasks) >= 4 and all(find(tasks, id=t["id"]) for t in tasks), "board lists tasks")
+    ok(all(any(c["text"] in ("builder", "reviewer", "docs") for c in t["chips"]) for t in tasks), "each task has an agent chip")
+    ok(all(any(c["text"] in ("question", "proposal", "result") for c in t["chips"]) for t in tasks), "each task has a kind chip")
+    ok(tile(bd, "Waiting on you") == "2" and tile(bd, "Open") == "3", "board stats at the start")
+    ok(any(t["meta"].endswith("new") for t in tasks), "unread counts show as meta")
+    prop = find(tasks, id="t-theme")
+    ok([a["id"] for a in prop["actions"]] == ["reply", "approve", "done"], "a proposal can be replied to, approved and closed")
+    ok("approve" not in [a["id"] for a in find(tasks, id="t-sync")["actions"]], "a question cannot be approved")
+    ok(find(tasks, id="t-lint")["tone"] == "muted" and "actions" not in find(tasks, id="t-lint"), "a closed task has no actions")
+    ext_do("board", "reply", item="t-sync", text="Skip it and log it")
+    ext_do("board", "reply", item="t-sync", text="", expect_ok=False)
+    ext_do("board", "reply", item="nope", text="hi", expect_ok=False)
+    bd2 = call("GET", "/extensions/board")
+    t1 = find(ext_rows(bd2, "Tasks"), id="t-sync")
+    ok(t1["meta"] != "1 new" and not t1["meta"].endswith("new"), "reply clears the unread count")
+    ok(any("Skip it and log it" in x for x in texts(bd2, "Thread")), "the reply is in the thread")
+    ext_do("board", "approve", item="t-theme")
+    ext_do("board", "approve", item="t-sync", expect_ok=False)
+    ok(find(ext_rows(call("GET", "/extensions/board"), "Tasks"), id="t-theme")["tone"] == "muted"
+       and "progress" in find(ext_rows(call("GET", "/extensions/board"), "Tasks"), id="t-theme"), "an approved proposal is in progress")
+    ext_do("board", "done", item="t-docs")
+    ok(tile(call("GET", "/extensions/board"), "Done today") == "3", "closing a task counts as done today")
+    ext_do("board", "done", item="t-docs", expect_ok=False)
+
+    # sessions
+    ss = ext_screen("sessions")
+    rows = ext_rows(ss, "Sessions")
+    ok(len(rows) == 3 and all("progress" in r for r in rows), "sessions carry a context progress")
+    ok([find(rows, id=i)["tone"] for i in ("ses-1", "ses-2", "ses-3")] == ["bad", "warn", "ok"], "context tone warms up as it fills")
+    p0 = find(rows, id="ses-3")["progress"]
+    acts = {a["id"]: a for a in find(rows, id="ses-1")["actions"]}
+    ok(acts["handoff"].get("confirm") and acts["stop"].get("confirm"), "hand off and stop ask first")
+    ext_do("sessions", "handoff", item="ses-1")
+    ext_do("sessions", "handoff", item="ses-1", expect_ok=False)
+    ss2 = call("GET", "/extensions/sessions")
+    ok(any("Handoff from builder-1" in x for x in texts(ss2, "Handoff note")), "the handoff note is shown")
+    ext_do("sessions", "stop", item="ses-2")
+    ok(find(ext_rows(call("GET", "/extensions/sessions"), "Sessions"), id="ses-2") is None, "a stopped session disappears")
+    ext_do("sessions", "stop", item="ses-2", expect_ok=False)
+
+    # helm
+    hm = ext_screen("helm")
+    pr = ext_rows(hm, "Projects")
+    ok(len(pr) >= 3 and all("progress" in r and r["chips"] for r in pr), "helm lists projects with milestone chips")
+    ok({r["tone"] for r in pr} >= {"ok", "warn", "bad"}, "project status dots vary")
+    b0 = find(pr, id="p-bridge")
+    ext_do("helm", "advance", item="p-bridge")
+    b1 = find(ext_rows(call("GET", "/extensions/helm"), "Projects"), id="p-bridge")
+    ok(b1["progress"] == 0 and b1["meta"] != b0["meta"], "advancing resets the progress and moves the milestone")
+    ok(sum(c["tone"] == "ok" for c in b1["chips"]) == 3, "one more milestone is done")
+    ext_do("helm", "note", item="p-bridge", text="Release candidate cut")
+    ok(find(ext_rows(call("GET", "/extensions/helm"), "Projects"), id="p-bridge")["subtitle"] == "Release candidate cut", "note replaces the state line")
+    ext_do("helm", "note", item="p-bridge", text="", expect_ok=False)
+    ext_do("helm", "advance", item="p-bridge")
+    ext_do("helm", "advance", item="p-bridge", expect_ok=False)      # all done now
+    ext_do("helm", "advance", item="nope", expect_ok=False)
+
+    # vibe: the whole flow, with the board and sessions timers running alongside
+    vb = ext_screen("vibe")
+    ok(len(ext_rows(vb, "Pull requests")) == 1, "vibe starts with one pull request")
+    ok("input" in [a for b in vb["sections"][0]["blocks"] if b["type"] == "actions" for a in b["actions"]][0], "propose takes text")
+    ext_do("vibe", "propose", text="", expect_ok=False)
+    ext_do("vibe", "propose", text="Add a compact mode to the energy card")
+    vb = call("GET", "/extensions/vibe")
+    props = [r for sec in vb["sections"] if sec["title"].startswith("Proposal") for b in sec["blocks"] if b["type"] == "list" for r in b["items"]]
+    ok(len(props) == 1 and texts(vb, "Proposal")[0].startswith("Plan for"), "a proposal with a plan appears")
+    ext_do("vibe", "approve", item="chg-nope", expect_ok=False)
+    ext_do("vibe", "approve", item=props[0]["id"])
+    vb = call("GET", "/extensions/vibe")
+    ok(any(b["type"] == "progress" for sec in vb["sections"] if sec["title"].startswith("Working") for b in sec["blocks"]), "approved work shows a progress bar")
+    ext_do("vibe", "propose", text="Another idea")
+    ext_do("vibe", "approve", item="chg-2", expect_ok=False)      # one agent at a time
+    ext_do("vibe", "discard", item="chg-2")
+    ext_do("vibe", "discard", item="chg-2", expect_ok=False)
+    # apps: start an update, then find another one
+    ap = ext_screen("apps")
+    arows = ext_rows(ap, "Apps")
+    ok(len(arows) == 3 and sum(1 for r in arows if "update available" in [c["text"] for c in r["chips"]]) == 1, "one app has an update at first")
+    ok(find(arows, id="notes")["subtitle"] == "installed 1.4.2, available 1.5.0" and find(arows, id="notes")["meta"].endswith("MB"), "versions and size are shown")
+    ext_do("apps", "update", item="notes")
+    ext_do("apps", "update", item="notes", expect_ok=False)
+    ext_do("apps", "update", item="reps", expect_ok=False)            # already current
+    ok("progress" in find(ext_rows(call("GET", "/extensions/apps"), "Apps"), id="notes"), "an update shows progress")
+    # board follow-up (4 s) and finished approval (6 s)
+    ok(wait_for(lambda: find(ext_rows(call("GET", "/extensions/board"), "Tasks"), id="t-sync")["meta"] == "1 new", 10),
+       "the agent posts a follow-up after a reply")
+    ok(find(ext_rows(call("GET", "/extensions/board"), "Tasks"), id="t-sync")["subtitle"].startswith("builder: "),
+       "the follow-up is the latest message of the task")
+    ok(wait_for(lambda: find(ext_rows(call("GET", "/extensions/board"), "Tasks"), id="t-theme")["chips"][-1]["text"] == "done", 15),
+       "an approved proposal finishes by itself")
+    done = find(ext_rows(call("GET", "/extensions/board"), "Tasks"), id="t-theme")
+    ok("Done." in done["subtitle"] and "actions" not in done, "the finished proposal shows a result line and no buttons")
+    ok(tile(call("GET", "/extensions/board"), "Done today") == "4", "the finished proposal counts as done today")
+    # sessions: the fresh session replaces the old one
+    ok(wait_for(lambda: find(ext_rows(call("GET", "/extensions/sessions"), "Sessions"), id="ses-1") is None, 15), "the handed off session is replaced")
+    fresh = [r for r in ext_rows(call("GET", "/extensions/sessions"), "Sessions") if r["title"] == "builder-2"]
+    ok(len(fresh) == 1 and fresh[0]["progress"] <= 10 and fresh[0]["tone"] == "ok", "the fresh session starts with low context")
+    p1 = find(ext_rows(call("GET", "/extensions/sessions"), "Sessions"), id="ses-3")["progress"]
+    ok(p1 >= p0, "context usage never goes down for a running session")
+    # apps update finished
+    ok(wait_for(lambda: "progress" not in find(ext_rows(call("GET", "/extensions/apps"), "Apps"), id="notes"), 10), "the app update finishes")
+    n = find(ext_rows(call("GET", "/extensions/apps"), "Apps"), id="notes")
+    ok(n["subtitle"] == "installed 1.5.0" and n["chips"][0]["text"] == "up to date", "the new version is shown after the update")
+    ext_do("apps", "check")
+    ap = call("GET", "/extensions/apps")
+    ok(sum(1 for r in ext_rows(ap, "Apps") if r["chips"][0]["text"] == "update available") == 1, "checking finds one more update")
+    ext_do("apps", "check")
+    ext_do("apps", "check")
+    ap = call("GET", "/extensions/apps")
+    ok(sum(1 for r in ext_rows(ap, "Apps") if r["chips"][0]["text"] == "update available") == 3, "every app can be behind")
+    r = ext_do("apps", "check")
+    ok(r and "No new" in r["message"], "nothing new once all apps are behind")
+    ext_do("apps", "update", item="recipes")
+    post("/extensions/apps/action", {"action": "nope"}, status=404)
+    for eid in ("board", "sessions", "helm", "vibe"):
+        post(f"/extensions/{eid}/action", {"action": "nope"}, status=404)
+
+    # vibe: the work finishes (9 s from approval) and opens a pull request
+    ok(wait_for(lambda: len(ext_rows(call("GET", "/extensions/vibe"), "Pull requests")) == 2, 20), "finished work opens a pull request")
+    prs = ext_rows(call("GET", "/extensions/vibe"), "Pull requests")
+    new = prs[0]
+    ok(new["id"] == "pr-53" and new["subtitle"].endswith("#53") and new["actions"][0]["id"] == "build", "the new pull request has Test build")
+    ok(new["subtitle"].startswith("fernwood/dashboard-ui"), "the repository is picked from the description")
+    ext_do("vibe", "build", item="pr-53")
+    ext_do("vibe", "build", item="pr-52", expect_ok=False)            # one build at a time
+    ext_do("vibe", "build", item="pr-53", expect_ok=False)
+    vb = call("GET", "/extensions/vibe")
+    ok(any(b["type"] == "progress" for sec in vb["sections"] if sec["title"].startswith("Test build") for b in sec["blocks"]), "the build shows progress")
+    ok(wait_for(lambda: find(ext_rows(call("GET", "/extensions/vibe"), "Pull requests"), id="pr-53")["chips"][0]["text"] == "build installed", 15),
+       "the build ends in build installed")
+    ok("build installed" in " ".join(texts(call("GET", "/extensions/vibe"), "Test build")), "the build log ends with build installed")
+    ext_do("vibe", "build", item="pr-52")
+    ext_do("vibe", "build", item="pr-nope", expect_ok=False)
+    ext_do("vibe", "approve", item="nope", expect_ok=False)
+    ok(wait_for(lambda: find(ext_rows(call("GET", "/extensions/apps"), "Apps"), id="recipes")["chips"][0]["text"] == "up to date", 10), "the last update finishes")
 
 
 def test_homelab_apps():
