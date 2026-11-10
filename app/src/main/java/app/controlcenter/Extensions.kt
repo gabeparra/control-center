@@ -290,8 +290,10 @@ private fun ExtensionDetail(id: String, snackbar: SnackbarHostState, onBack: () 
         }.onSuccess { r ->
             val msg = r.str("message")
             val okay = r.optBoolean("ok", true)
-            if (msg.isNotBlank()) snackbar.showSnackbar(if (okay) msg else "failed: $msg")
-            else if (!okay) snackbar.showSnackbar("${act.label} failed")
+            // showSnackbar suspends until the message goes away, so it must not
+            // hold up the refresh or the buttons stay disabled for several seconds.
+            if (msg.isNotBlank()) scope.launch { snackbar.showSnackbar(if (okay) msg else "failed: $msg") }
+            else if (!okay) scope.launch { snackbar.showSnackbar("${act.label} failed") }
             if (r.optBoolean("refresh", true)) fetch()
         }.onFailure { snackbar.showSnackbar("${act.label} failed: ${it.message}") }
         busy = false

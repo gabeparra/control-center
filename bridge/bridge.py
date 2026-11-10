@@ -2505,9 +2505,9 @@ class AgentBoard(Ext):
         self.n_replies = 0
         self.tasks = [
             self._task("t-sync", "Sync keeps dropping the last file", "builder", "question", "waiting", 1,
-                       [("builder", "Sync stops one file short on large folders. Retry the last file, or skip it and log it?", t - 1500)]),
+                       [("builder", "Sync stops one file short on big folders. Retry it or skip it?", t - 1500)]),
             self._task("t-theme", "Dark theme for the energy card", "reviewer", "proposal", "waiting", 1,
-                       [("reviewer", "Plan: add a theme token set, switch the card to it, update two screenshots. Approve?", t - 2400)]),
+                       [("reviewer", "Plan: add theme tokens, switch the card to them. Approve?", t - 2400)]),
             self._task("t-docs", "Rewrite the install notes", "docs", "result", "review", 2,
                        [("docs", "Draft is ready in docs/install.md.", t - 5400),
                         ("docs", "I also fixed three broken links.", t - 5000)]),
@@ -2637,9 +2637,9 @@ class AgentSessions(Ext):
         self.seq = 0
         self.notes: list[dict] = []
         self.sessions = [
-            self._new("builder-1", "atlas", "homelab-bridge", t - 9300, 91, 0.04, 0),
-            self._new("reviewer-1", "workbench", "dashboard-ui", t - 4100, 68, 0.05, 1),
-            self._new("docs-1", "pi-lab", "install-notes", t - 1500, 24, 0.06, 2),
+            self._new("builder-1", "atlas", "homelab-bridge", t - 9300, 91, 0.012, 0),
+            self._new("reviewer-1", "workbench", "dashboard-ui", t - 4100, 68, 0.015, 1),
+            self._new("docs-1", "pi-lab", "install-notes", t - 1500, 24, 0.02, 2),
         ]
 
     def _new(self, name, machine, project, started, ctx, rate, note):
@@ -2814,7 +2814,7 @@ class Vibe(Ext):
         self.seq = 0
         self.changes: list[dict] = []       # proposals and work in flight: proposed, working
         self.prs = [{"id": "pr-52", "repo": "fernwood/dashboard-ui", "n": 52,
-                     "title": "Add compact mode to the energy card", "state": "open", "t0": None}]
+                     "title": "Show kilowatt hours on the energy card", "state": "open", "t0": None}]
 
     def _settle(self):
         t = now()
@@ -2842,7 +2842,9 @@ class Vibe(Ext):
         if b:
             return f"Building #{b['n']}", None, "warn"
         props = sum(1 for c in self.changes if c["state"] == "proposed")
-        return f"{props} proposals, {len(self.prs)} open pull requests", props or None, "ok"
+        n = len(self.prs)
+        return (f"{props} proposal{'' if props == 1 else 's'}, {n} open pull request{'' if n == 1 else 's'}",
+                props or None, "ok")
 
     def sections(self):
         self._settle()
@@ -2874,7 +2876,7 @@ class Vibe(Ext):
             tone = "warn" if building else "ok" if p["state"] == "installed" else "muted"
             acts = [btn("build", "Test build", "primary", item=p["id"])] if p["state"] == "open" else []
             rows.append(row(p["id"], p["title"], f"{p['repo']}#{p['n']}",
-                            "building" if building else "build installed" if p["state"] == "installed" else "open",
+                            "building" if building else "",
                             tone, [chip("build installed" if p["state"] == "installed" else "open", tone)],
                             progress=(t - p["t0"]) / VIBE_BUILD_S * 100 if building else None, actions=acts))
         out.append(section("Pull requests", {"type": "list", "items": rows}))

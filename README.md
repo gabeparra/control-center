@@ -118,9 +118,11 @@ The homelab apps (Uptime Kuma, Syncthing, Paperless, Pi-hole, WireGuard and the 
 
 | | | |
 |---|---|---|
-| <img src="docs/screenshots/extension-pogo.png" width="200" alt="Raid calendar extension"> | <img src="docs/screenshots/extension-deadlock.png" width="200" alt="Deadlock draft helper with the overlay running"> | <img src="docs/screenshots/extension-vscode.png" width="200" alt="VS Code extension with remote sessions and tunnels"> |
-| <img src="docs/screenshots/extension-uptime.png" width="200" alt="Uptime Kuma extension with one monitor down and uptime bars"> | <img src="docs/screenshots/extension-syncthing.png" width="200" alt="Syncthing extension with a folder syncing"> | <img src="docs/screenshots/extension-pihole.png" width="200" alt="Pi-hole extension with blocking paused"> |
-| <img src="docs/screenshots/extension-wireguard.png" width="200" alt="WireGuard extension with peers and handshake ages"> | <img src="docs/screenshots/extension-raspi.png" width="200" alt="Raspberry Pi extension with health and settings"> | |
+| <img src="docs/screenshots/extension-board.png" width="200" alt="Agent board with tasks per agent, kind chips and unread counts"> | <img src="docs/screenshots/extension-sessions.png" width="200" alt="Sessions with a context usage bar that turns red as it fills"> | <img src="docs/screenshots/extension-helm.png" width="200" alt="Helm project board with milestone chips"> |
+| <img src="docs/screenshots/extension-vibe.png" width="200" alt="Vibe flow with an agent at work, a progress bar and a growing log"> | <img src="docs/screenshots/extension-apps.png" width="200" alt="Managed apps with an update installing"> | <img src="docs/screenshots/extension-uptime.png" width="200" alt="Uptime Kuma extension with one monitor down and uptime bars"> |
+| <img src="docs/screenshots/extension-pihole.png" width="200" alt="Pi-hole extension with blocking paused"> |  |  |
+
+More extension screenshots (GitHub, Syncthing, WireGuard, Raspberry Pi, VS Code, Pogo, Deadlock) are in `docs/screenshots/`.
 
 The block table and a "write your own" walkthrough are in [bridge/README.md](bridge/README.md#extensions).
 
