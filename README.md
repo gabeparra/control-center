@@ -16,7 +16,7 @@ The demo bridge serves an invented homelab (machines, services, containers, logs
 uv run bridge/bridge.py --demo
 ```
 
-It listens on `127.0.0.1:8790`. Then open the app and enter the bridge URL on the first-run setup card:
+It listens on `127.0.0.1:8790`. Install the app (a prebuilt APK is on the [releases page](../../releases), or build it yourself, see "Build" below), open it and enter the bridge URL on the first-run setup card:
 
 - **Android emulator:** `http://10.0.2.2:8790`
 - **Phone on the same network:** start the bridge with `--host 0.0.0.0` and use `http://<your computer's LAN address>:8790`.
