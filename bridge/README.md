@@ -116,7 +116,7 @@ The app shows the **Extras** tab only when `/capabilities` lists `extensions`.
 A bridge with no `/capabilities` at all never gets the tab, because an older
 bridge cannot have `/extensions`.
 
-The demo serves nine, all with invented data and in-memory state. None of them
+The demo serves twelve, all with invented data and in-memory state. None of them
 calls a real service, runs a command or touches the network:
 
 | Id | Shows | Actions |
@@ -129,6 +129,9 @@ calls a real service, runs a command or touches the network:
 | `uptime` | Uptime monitors with up or down tone, response time and a 24 hour uptime bar; one is down | Pause and resume a monitor. |
 | `paperless` | Document counts, inbox with tag chips, a consume queue item that finishes after about 12 seconds | "Mark reviewed" removes an inbox item. |
 | `syncthing` | Folders with state (up to date, syncing with a moving bar, out of sync) and connected devices | "Rescan" starts a sync of about 12 seconds that ends up to date. |
+| `pihole` | Group Network. DNS filtering: queries and blocked counts, blocking state, top blocked domains (reserved example names), top clients, recent queries with allowed or blocked tone | "Pause 5 min" (a 20 second pause in the demo that ends by itself), Enable, Disable (asks first), and "Add to blocklist" with a text input. |
+| `wireguard` | Group Network. VPN server: interface and port, peers with address, handshake age, transfer and a tone from how recent the handshake is. Keys are placeholders; no private keys or configs are shown | Enable or disable a peer, Remove (asks first), "Add peer" with a text input; the new peer waits for a first handshake and connects after about 8 seconds. |
+| `raspi` | Group Raspberry Pi. The demo Pi's health and settings: model, CPU temperature, uptime, firmware state, power and throttling flags, SD card usage and wear, interface toggles (SSH, VNC, I2C, SPI, serial, camera), boot target, hostname (read only), overclock preset | Enable or disable each interface, change boot target and overclock (applied after a reboot), "Update firmware" (about 10 seconds with a progress bar), Reboot (asks first; shows "rebooting" for about 8 seconds, then uptime restarts). |
 | `hello` | A counter | Greet, with a text input. The example used below. |
 
 Honest limits: in `forge` nothing is created or built. The scaffold-an-Expo-project-and-build-it-with-a-coding-agent flow is
@@ -136,6 +139,8 @@ only described, and the log and preview page are canned text. `pogo` uses made-u
 a few well-known creature names; a real version would read a public community event feed. `deadlock`
 numbers are invented too. The homelab apps (`uptime`, `paperless`, `syncthing`) are demo views with invented
 titles, users and numbers; a real bridge would call each app's own status API and fill the same blocks.
+`pihole`, `wireguard` and `raspi` are the same kind of demo view. A real bridge would call Pi-hole's own API,
+the `wg` tool and the Pi's configuration tool, and would keep WireGuard private keys out of the answer.
 
 ### Endpoints
 

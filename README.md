@@ -102,20 +102,23 @@ Control Center does not ship a backend of its own. It is a client for whatever H
 
 An extension is an integration the bridge describes and the app renders with one generic screen, so adding one needs a bridge change and no new APK. The bridge lists them at `GET /extensions`, serves each one as sections of typed blocks (stats, list, progress, text, chips, actions, link) at `GET /extensions/{id}`, and takes button presses at `POST /extensions/{id}/action`. The app refreshes the open screen on the pace the bridge asks for. Unknown block types and fields are ignored, so a newer bridge does not break an older app.
 
-The demo bridge serves nine, all with invented data (`--extensions github,hello` picks which). The list shows them under group headers, which come from an optional `group` field in `GET /extensions`; a bridge that sends none gets a flat list.
+The demo bridge serves twelve, all with invented data (`--extensions github,hello` picks which). The list shows them under group headers, which come from an optional `group` field in `GET /extensions`; a bridge that sends none gets a flat list.
 
 - **Development**: **GitHub** (pull requests, CI runs, merge and re-run), **VS Code** (remote sessions and tunnels), **App forge** (describe an app and watch a fake build job; in demo mode nothing is built, a real version would scaffold an Expo project and build it with a coding agent).
 - **Monitoring**: **Uptime Kuma** (monitors with response times and 24 hour uptime, pause and resume).
+- **Network**: **Pi-hole** (DNS filtering stats, pause for a short while, enable or disable, add a domain to the blocklist) and **WireGuard** (VPN peers with handshake age and transfer, enable, disable, remove, add a peer).
+- **Raspberry Pi**: **Raspberry Pi** (temperature, uptime and throttling flags, SD card, interface toggles, boot and overclock settings, firmware update, reboot).
 - **Files**: **Syncthing** (folder sync state with a moving progress bar, rescan) and **Paperless** (document inbox, a consume queue, mark reviewed).
 - **Games**: **Pogo raids** (sample raid bosses and events with made-up dates; a real version would read a public community event feed) and **Deadlock** (a draft-advisor overlay switch, suggested picks, recent matches, all sample numbers).
 - **Examples**: **Hello**, the 20-line example.
 
-The homelab apps (Uptime Kuma, Syncthing, Paperless) are demo views with invented titles, users and numbers. A real bridge would call each app's own API and return the same blocks.
+The homelab apps (Uptime Kuma, Syncthing, Paperless, Pi-hole, WireGuard and the Pi panel) are demo views with invented titles, users and numbers. A real bridge would call each app's own API (Pi-hole's API, the `wg` tool, the Pi's configuration tool) and return the same blocks.
 
 | | | |
 |---|---|---|
 | <img src="docs/screenshots/extension-pogo.png" width="200" alt="Raid calendar extension"> | <img src="docs/screenshots/extension-deadlock.png" width="200" alt="Deadlock draft helper with the overlay running"> | <img src="docs/screenshots/extension-vscode.png" width="200" alt="VS Code extension with remote sessions and tunnels"> |
-| <img src="docs/screenshots/extension-uptime.png" width="200" alt="Uptime Kuma extension with one monitor down and uptime bars"> | <img src="docs/screenshots/extension-syncthing.png" width="200" alt="Syncthing extension with a folder syncing"> | |
+| <img src="docs/screenshots/extension-uptime.png" width="200" alt="Uptime Kuma extension with one monitor down and uptime bars"> | <img src="docs/screenshots/extension-syncthing.png" width="200" alt="Syncthing extension with a folder syncing"> | <img src="docs/screenshots/extension-pihole.png" width="200" alt="Pi-hole extension with blocking paused"> |
+| <img src="docs/screenshots/extension-wireguard.png" width="200" alt="WireGuard extension with peers and handshake ages"> | <img src="docs/screenshots/extension-raspi.png" width="200" alt="Raspberry Pi extension with health and settings"> | |
 
 The block table and a "write your own" walkthrough are in [bridge/README.md](bridge/README.md#extensions).
 
