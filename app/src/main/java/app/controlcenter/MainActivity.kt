@@ -194,6 +194,7 @@ data class QuickAction(val key: String, val label: String, val desc: String)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(this)
         enableEdgeToEdge()
         val prefs = getSharedPreferences("controlcenter", Context.MODE_PRIVATE)
         Api.baseUrl = prefs.getString("baseUrl", Api.baseUrl)!!

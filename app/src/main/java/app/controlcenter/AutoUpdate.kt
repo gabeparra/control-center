@@ -15,7 +15,35 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import java.util.concurrent.TimeUnit
+
+/** One of your other sideloaded apps that the background worker can install/update.
+ *  Served by the bridge's /apps/managed endpoint (a matching `<package>` in
+ *  AndroidManifest's `<queries>` block is required on Android 11+). */
+data class ManagedApp(val name: String, val packageName: String, val manifestUrl: String)
+
+/** The managed-app list, fetched once per process from the bridge. An empty
+ *  list from a half-written config is ignored rather than adopted. */
+object ManagedAppsState {
+    var apps by mutableStateOf(listOf<ManagedApp>())
+        private set
+    private var loaded = false
+
+    suspend fun load() {
+        if (loaded) return
+        runCatching {
+            val rows = Api.get("/apps/managed").getJSONArray("apps")
+            val fetched = (0 until rows.length()).map {
+                val o = rows.getJSONObject(it)
+                ManagedApp(o.getString("name"), o.getString("packageName"), o.getString("manifestUrl"))
+            }
+            if (fetched.isNotEmpty()) { apps = fetched; loaded = true }
+        }
+    }
+}
 
 /** Forced updates: a background worker checks the manifests and installs
  *  updates without asking. Managed apps install SILENTLY because Control Center

@@ -148,6 +148,25 @@ fun SettingsScreen(snackbar: SnackbarHostState, onSaveUrl: (String) -> Unit) {
             scope.launch { snackbar.showSnackbar("power & wake saved") }
         }, colors = ButtonDefaults.buttonColors(containerColor = Amber)) { Text("Save power & wake") }
 
+        Spacer(Modifier.height(6.dp))
+        Text("DIAGNOSTICS", color = Amber, fontSize = 13.sp,
+            fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        var crash by remember { mutableStateOf(CrashLog.read(ctx)) }
+        var showCrash by remember { mutableStateOf(false) }
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(if (crash == null) "No crash recorded." else "The app crashed last time it ran.",
+                color = Muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            if (crash != null) TextButton(onClick = { showCrash = true }) { Text("View last crash") }
+        }
+        if (showCrash) AlertDialog(
+            onDismissRequest = { showCrash = false },
+            title = { Text("Last crash") },
+            text = { Text(crash ?: "", fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                modifier = Modifier.verticalScroll(rememberScrollState())) },
+            confirmButton = { TextButton(onClick = { showCrash = false }) { Text("Close") } },
+            dismissButton = { TextButton(onClick = { CrashLog.clear(ctx); crash = null; showCrash = false }) { Text("Clear") } },
+        )
+
         Spacer(Modifier.height(24.dp))
     }
 }
