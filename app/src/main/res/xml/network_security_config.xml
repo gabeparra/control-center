@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext HTTP is allowed. Every address this app talks to is one the user
+     typed in Settings (a LAN host, an emulator at 10.0.2.2, a home server), and
+     most of those do not have a certificate. The bridge has no login of its
+     own, so Settings recommends HTTPS or a private network such as a tailnet. -->
+<network-security-config>
+    <!--suppress InsecureBaseConfiguration -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
