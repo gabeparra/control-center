@@ -274,7 +274,7 @@ CTR_LINES = {
     ],
     "zigbee2mqtt": [
         "Zigbee2MQTT:info  MQTT publish: topic 'zigbee2mqtt/hall lamp', payload '{\"state\":\"ON\"}'",
-        "Zigbee2MQTT:info  Successfully interviewed 'desk plug'",
+        "Zigbee2MQTT:info  Successfully configured 'desk plug'",
         "Zigbee2MQTT:debug Received Zigbee message from 'hall sensor'",
     ],
     "paperless": [
