@@ -8,7 +8,9 @@
 
 A single-activity Android app that puts your home server in your pocket: services, containers, a terminal, vitals, wake-on-LAN, alerts, and your Jellyfin library, all in one place. It is a thin client for a small HTTP "bridge" that you run on your own machine. A reference bridge with demo data is included, so you can try the app without a server.
 
-## Try it with the demo bridge
+**Status:** `Active` - public reference edition of the Android homelab client and demo HTTP bridge.
+
+## Quickstart (Demo Bridge)
 
 The demo bridge serves an invented homelab (machines, services, containers, logs, a fake terminal, a small made-up Jellyfin library with one generated test clip). It never runs a command or touches your system. You need [uv](https://docs.astral.sh/uv/).
 
